@@ -90,6 +90,13 @@ pub fn start(fb: &FbInfo, seed: u64) -> bool {
     true
 }
 
+/// Redraws the whole screen on the next frame (after the firmware may have drawn over it).
+pub fn repaint() {
+    if active() {
+        render(true, None);
+    }
+}
+
 pub fn active() -> bool {
     state().active
 }

@@ -972,6 +972,12 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
                 // The animated boot screen (bootfx) owns the screen; the console holds the log back.
                 c.hold_for_bootfx();
             }
+            // The firmware console no longer shares the screen; hide its cursor before anything is drawn
+            // (hiding it later makes the firmware repaint the cursor cell over our picture).
+            if !st.con_out.is_null() {
+                // SAFETY: con_out is a live text-output protocol until ExitBootServices.
+                unsafe { ((*st.con_out).enable_cursor)(st.con_out, false) };
+            }
             let animate = c.splash_active();
             let (cols, rows) = c.size();
             log::detach_conout();
@@ -988,11 +994,6 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
                         c.fade_logo(255);
                     });
                 }
-            }
-            // The firmware console no longer shares the screen; hide its cursor.
-            if !st.con_out.is_null() {
-                // SAFETY: con_out is a live text-output protocol until ExitBootServices.
-                unsafe { ((*st.con_out).enable_cursor)(st.con_out, false) };
             }
             info!("fb", "gop {}x{} stride={} fmt={:?} base={:#x} console={}x{}", f.width, f.height, f.stride, f.format, f.base, cols, rows);
         } else {
@@ -1016,7 +1017,9 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         // Catch the bar up with the stages that ran before the console existed.
         // SAFETY: single-threaded boot; plain read of the stage counter.
         let done = unsafe { (*STAGES.as_ptr()).n }.saturating_sub(1);
-        let _ = log::with_console(|c| c.progress(splash::stage_permille(done, TOTAL_STAGES)));
+        if !bootfx::active() {
+            let _ = log::with_console(|c| c.progress(splash::stage_permille(done, TOTAL_STAGES)));
+        }
     }
 
     // ---- Stage 3: platform discovery ----
@@ -1174,6 +1177,8 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
     stage("kernel-env");
     bootfx::stage("Setting up paging and memory protection", 220);
     info!("boot", "boot services exited after {} attempt(s)", attempts + 1);
+    // The firmware can no longer draw: repaint the whole boot screen once to wipe anything it left.
+    bootfx::repaint();
     {
         let b = boot_info();
         info!(

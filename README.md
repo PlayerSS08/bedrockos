@@ -9,6 +9,16 @@ reaches the (inherited) text shell. There is no desktop yet. See
 [`docs/STATUS.md`](docs/STATUS.md) for exactly what is done and tested, and [`docs/PLAN.md`](docs/PLAN.md)
 for the design.
 
+## Screenshots (VirtualBox, captured from real boots)
+
+| Boot menu with countdown (1920x1080) | Boot progress driven by real stages (1920x1080) |
+|---|---|
+| ![Boot menu](docs/img/boot-menu-1920x1080.png) | ![Boot progress](docs/img/boot-progress-1920x1080.png) |
+
+Pressing Esc or V during boot switches to the scrolling log:
+
+![Verbose boot log](docs/img/verbose-log-1024x768.png)
+
 ## Quick start
 
 ```sh

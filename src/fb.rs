@@ -107,6 +107,8 @@ pub struct Console {
     cont: [bool; HIST_ROWS],
     /// The boot menu was opened over the splash screen, so it can hand the splash back.
     menu_from_splash: bool,
+    /// The animated boot screen (`bootfx`) owns the pixels: the console draws nothing at all.
+    held: bool,
     /// While true the full-screen editor owns the screen and the log is not painted.
     editor: bool,
     /// The cell (column, row) where the editor's cursor is painted.
@@ -167,6 +169,7 @@ impl Console {
             logo_row: 0,
             cont: [false; HIST_ROWS],
             menu_from_splash: false,
+            held: false,
             editor: false,
             edit_cursor: None,
             pointer: None,
@@ -211,7 +214,9 @@ impl Console {
     /// device memory owned by the console, hence `&self` yielding a mutable span.
     #[allow(clippy::mut_from_ref)]
     pub fn row_mut(&self, x: usize, y: usize, len: usize) -> Option<&mut [u32]> {
-        if y >= self.height || x >= self.width {
+        // While the animated boot screen owns the pixels, the console writes none (every drawing path
+        // goes through here).
+        if self.held || y >= self.height || x >= self.width {
             return None;
         }
         let len = len.min(self.width - x);
@@ -412,11 +417,13 @@ impl Console {
     pub fn hold_for_bootfx(&mut self) {
         self.splash = true;
         self.menu = false;
+        self.held = true;
     }
 
     /// Takes the screen back from the boot screen and shows the log full-screen; the caller replays the
     /// held-back lines.
     pub fn release_to_log(&mut self) {
+        self.held = false;
         self.splash = false;
         self.menu = false;
         self.clear();
@@ -425,6 +432,7 @@ impl Console {
 
     /// Takes the screen back from the boot screen without drawing the log (the shell or desktop follows).
     pub fn release_quiet(&mut self) {
+        self.held = false;
         self.splash = false;
         self.menu = false;
     }
@@ -435,11 +443,17 @@ impl Console {
 
     /// Draws the logo at brightness level (0 = black, 255 = full), for a fade-in.
     pub fn fade_logo(&self, level: u8) {
+        if self.held {
+            return;
+        }
         self.draw_logo_rgb(splash::dim(LOGO_RGB, level), BG);
     }
 
     /// Fills the progress bar to permille thousandths.
     pub fn progress(&mut self, permille: u32) {
+        if self.held {
+            return;
+        }
         if !self.splash {
             return;
         }
@@ -457,6 +471,9 @@ impl Console {
 
     /// Dims the whole splash (logo, bar track and bar fill) to level / 255 for the fade-out.
     pub fn fade_splash(&self, level: u8) {
+        if self.held {
+            return;
+        }
         if !self.splash {
             return;
         }
@@ -470,6 +487,9 @@ impl Console {
     }
     /// Shows a short centred line under the bar (empty `text` removes it).
     pub fn hint(&self, text: &[u8]) {
+        if self.held {
+            return;
+        }
         if !self.splash {
             return;
         }
