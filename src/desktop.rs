@@ -326,6 +326,36 @@ pub fn draw_tip(c: &mut Canvas, l: &DeskLayout, r: Rect, lines: &[String]) {
         c.text(f, r.x + 14, r.y + 9 + i as i32 * (f.height as i32 + 6), s, col, 1.0);
     }
 }
+/// Where the achievement toast goes: the top right corner, under the panel.
+pub fn toast_rect(l: &DeskLayout) -> Rect {
+    let (w, h) = if l.big() { (440, 84) } else { (360, 70) };
+    Rect::new(l.w - w - 16, l.panel.bottom() + 14, w, h)
+}
+
+/// An "Achievement get!" toast, Minecraft style: dark box, a gold title line and the achievement's name.
+pub fn draw_toast(c: &mut Canvas, l: &DeskLayout, title: &str) {
+    let r = toast_rect(l);
+    let f = face(l.big());
+    let (x, y, w, h) = (r.x as f32, r.y as f32, r.w as f32, r.h as f32);
+    c.shadow(x, y + 4.0, w, h, 6.0, 16.0, 0, 0.55);
+    c.round_rect(x, y, w, h, 6.0, rgb(33, 33, 33), 0.96);
+    c.round_rect_stroke(x + 1.5, y + 1.5, w - 3.0, h - 3.0, 5.0, 2.0, rgb(85, 85, 85), 1.0);
+    // The icon: a little grass block.
+    let s = r.h - 28;
+    let (ix, iy) = (r.x + 14, r.y + 14);
+    c.fill_rect(Rect::new(ix, iy, s, s), rgb(134, 96, 67));
+    c.fill_rect(Rect::new(ix, iy, s, s / 3), rgb(106, 170, 64));
+    for k in 0..4 {
+        c.fill_rect(Rect::new(ix + k * s / 4 + 1, iy + s / 3, s / 8, s / 8), rgb(106, 170, 64));
+        c.fill_rect(Rect::new(ix + (k * 2 + 1) * s / 8, iy + s * 2 / 3, s / 10 + 1, s / 10 + 1), rgb(110, 78, 52));
+    }
+    let tx = ix + s + 14;
+    let line = f.height as i32 + 6;
+    let ty = r.y + (r.h - 2 * line + 6) / 2;
+    c.text(f, tx, ty, "Achievement get!", rgb(255, 255, 85), 1.0);
+    c.text(f, tx, ty + line, title, rgb(255, 255, 255), 1.0);
+}
+
 /// The dock, with a dot under every app whose window is open.
 pub fn draw_dock(c: &mut Canvas, l: &DeskLayout, open: &[bool; APPS.len()]) {
     let d = l.dock;

@@ -757,6 +757,9 @@ fn cmd_ping(rest: &str) {
         .unwrap_or(0);
     out!("{} packets transmitted, {} received, {}% packet loss\n", stats.sent, stats.received, loss_pct);
     if stats.received > 0 {
+        crate::achieve::unlock(crate::achieve::Id::Online);
+    }
+    if stats.received > 0 {
         out!(
             "rtt min/avg/max = {}.{:03}/{}.{:03}/{}.{:03} ms\n",
             stats.min_us / 1000, stats.min_us % 1000,
@@ -951,6 +954,7 @@ fn wifi_scan_host() {
     match crate::wifihost::link::scan(&mut nets) {
         Ok(0) => out!("no Wi-Fi networks found\n"),
         Ok(n) => {
+            crate::achieve::unlock(crate::achieve::Id::WifiScan);
             out!("  SIGNAL  SECURITY  NETWORK (scanned by the host's Wi-Fi)\n");
             for net in &nets[..n] {
                 out!("  {:>5}%  {:<8}  {}{}\n", net.signal, if net.secure { "locked" } else { "open" }, net.ssid(), if net.current { "   <- connected now" } else { "" });
@@ -1019,7 +1023,10 @@ fn wifi_choose() {
             out!("no Wi-Fi networks found. Try `wifi` again.\n");
             return;
         }
-        Ok(n) => n,
+        Ok(n) => {
+            crate::achieve::unlock(crate::achieve::Id::WifiScan);
+            n
+        }
         Err(e) => {
             out!("cannot scan: {}\n", e.as_str());
             return;
@@ -3428,7 +3435,14 @@ fn cmd_extra(cmd: &str, rest: &str) {
             out!("Desktop with ChatBox (this shell), Notes, Tasks and Help; networking over the laptop's connection.\n");
             out!("Based on Aeon 0.11.0. Fonts: Inter and JetBrains Mono (SIL Open Font License 1.1).\n");
         }
+        "achievements" => {
+            out!("Achievements: {} of {}\n", crate::achieve::count(), crate::achieve::LIST.len());
+            for (i, (title, how)) in crate::achieve::LIST.iter().enumerate() {
+                out!("  [{}] {:<26} {}\n", if crate::achieve::is_unlocked(i) { "x" } else { " " }, title, how);
+            }
+        }
         "neofetch" => {
+            crate::achieve::unlock(crate::achieve::Id::Neofetch);
             let s = log::uptime_us() / 1_000_000;
             let f = mm::frame_stats();
             let h = mm::heap_stats();
@@ -3881,7 +3895,7 @@ fn run_plain(line: &str, hist: &History) {
             Ok(()) => {}
             Err(e) => out!("open: {} (apps: notes tasks files network calculator clock snake settings help)\n", e),
         },
-        "calc" | "about" | "neofetch" | "cmds" | "keys" | "uuid" | "rand" | "fortune" | "base64" | "bench" | "todo-today" => cmd_extra(cmd, rest),
+        "calc" | "about" | "neofetch" | "achievements" | "cmds" | "keys" | "uuid" | "rand" | "fortune" | "base64" | "bench" | "todo-today" => cmd_extra(cmd, rest),
         "net" => {
             out!("Host connection (laptop Wi-Fi): the VM's network card, through VirtualBox NAT or Bridged.\n");
             out!("The laptop chooses the Wi-Fi network in this mode. OS Wi-Fi: no supported chip yet (milestone 8).\n");

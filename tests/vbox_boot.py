@@ -150,6 +150,27 @@ class Result:
         return all(r[1] for r in self.rows)
 
 
+# Scan codes (set 1) for typing into the VM.
+_ROWS = {"1234567890-=": 0x02, "qwertyuiop[]": 0x10, "asdfghjkl;'`": 0x1E, "zxcvbnm,./": 0x2C}
+_CODES = {ch: start + i for row, start in _ROWS.items() for i, ch in enumerate(row)}
+_CODES.update({" ": 0x39, "\t": 0x0F, "\r": 0x1C, "\b": 0x0E})
+_SHIFTED = {"_": "-", "+": "=", "!": "1", "@": "2", "#": "3", "$": "4", "%": "5", "^": "6", "&": "7", "*": "8", "(": "9", ")": "0"}
+
+
+def type_text(text):
+    codes = []
+    for ch in text:
+        if ch.isupper() or ch in _SHIFTED:
+            c = _CODES[_SHIFTED.get(ch, ch.lower())]
+            codes += [0x2A, c, c | 0x80, 0xAA]
+        else:
+            c = _CODES[ch]
+            codes += [c, c | 0x80]
+    for i in range(0, len(codes), 16):
+        vb("controlvm", VM, "keyboardputscancode", *[f"{c:02x}" for c in codes[i:i + 16]], check=False)
+        time.sleep(0.05)
+
+
 def boot_at(res, r, keep):
     print(f"\n== boot at {res} ==", flush=True)
     poweroff()
@@ -157,6 +178,15 @@ def boot_at(res, r, keep):
     if os.path.exists(SERIAL):
         os.remove(SERIAL)
     vb("startvm", VM, "--type", "headless")
+    # The sign-in screen comes first: a wrong password must be refused, then the right one lets the boot go on.
+    if wait_for(["login open"], 60)[0]:
+        time.sleep(1.0)
+        type_text("BedrockOS\twrongpass1\r")
+        bad, _ = wait_for(["wrong user name or password"], 10)
+        r.check(f"{res}: login refuses a wrong password", bad)
+        type_text("MinecraftSS_08\r")
+        good, _ = wait_for(["signed in as BedrockOS"], 10)
+        r.check(f"{res}: login accepts the right password", good)
     # The boot menu waits for a choice: press Enter on "Boot BedrockOS" once it is open.
     if wait_for(["menu open"], 60)[0]:
         time.sleep(1.0)

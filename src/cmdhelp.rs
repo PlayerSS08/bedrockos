@@ -45,6 +45,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("system", "battery", "battery", "the laptop's battery level"),
     c("system", "open", "open <app>", "open an app: notes, files, clock, snake..."),
     c("system", "neofetch", "neofetch", "system summary with a logo"),
+    c("system", "achievements", "achievements", "Minecraft-style achievements you have unlocked"),
     c("system", "cmds", "cmds", "every command, by group"),
     c("system", "keys", "keys", "all keyboard shortcuts"),
     c("tools", "calc", "calc <expr>", "calculator: + - * / % ^ and ( )"),

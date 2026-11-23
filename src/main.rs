@@ -694,11 +694,21 @@ fn reboot_to_firmware_setup(rt: &RuntimeServices) {
 /// Returns the possibly updated options.
 fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, opts: BootOpts) -> BootOpts {
     use bedrockos::menulogic::{Entry, Key, Menu, Outcome};
-    if opts.menu_timeout == 0 || st.con_in.is_null() {
+    if st.con_in.is_null() {
         return opts;
     }
     // SAFETY: con_in is a live protocol (checked non-null); resetting also drops stale keystrokes.
     unsafe { ((*st.con_in).reset)(st.con_in, false) };
+    if bootfx::active() {
+        bootfx::set_key_poll(None);
+        login_screen(st, bs);
+    }
+    if opts.menu_timeout == 0 {
+        if FW_ST.load(Ordering::Relaxed) != 0 {
+            bootfx::set_key_poll(Some(fw_verbose_key));
+        }
+        return opts;
+    }
     let wait = opts.menu_timeout == bedrockos::bootopts::WAIT;
     if wait {
         info!("menu", "menu open: waiting for a choice (arrow keys choose an entry, Enter selects)");
@@ -763,6 +773,71 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, opts: Bo
         leave_plain_menu();
     }
     opts
+}
+
+/// The sign-in screen before the boot menu (see `bedrockos::login`): waits until the right user name and
+/// password are typed. Keys come through the firmware, so USB keyboards work.
+fn login_screen(st: &SystemTable, bs: &BootServices) {
+    use bedrockos::login::{Key, Login, Outcome};
+    info!("login", "login open: waiting for the user name and password");
+    let mut login = Login::new();
+    let hz = u128::from(log::tsc_hz().max(1));
+    let t0 = bedrockos::arch::rdtsc();
+    let mut last = t0;
+    let mut msg = [0u8; 48];
+    let mut draw = |login: &Login, force: bool| {
+        let now = bedrockos::arch::rdtsc();
+        let caret = (u128::from(now.wrapping_sub(t0)) * 1000 / hz / 530) % 2 == 0;
+        let message = if login.locked() {
+            let mut b = logfmt::LineBuf::<48>::new();
+            let _ = write!(b, "Too many wrong tries. Wait {} s.", login.lock_seconds());
+            let t = b.finish();
+            let n = (t.len() - 1).min(msg.len());
+            msg[..n].copy_from_slice(&t[..n]);
+            core::str::from_utf8(&msg[..n]).unwrap_or("")
+        } else {
+            login.message
+        };
+        let view = bedrockos::bootscene::LoginView { user: login.user(), stars: login.stars(), field: login.field, message, error: login.error, caret };
+        bootfx::login_frame(&view, force);
+    };
+    draw(&login, true);
+    loop {
+        let _ = (bs.stall)(5_000);
+        let now = bedrockos::arch::rdtsc();
+        let ms = (u128::from(now.wrapping_sub(last)) * 1000 / hz).min(u128::from(u32::MAX)) as u32;
+        last = now;
+        let mut outcome = login.tick(ms);
+        if let Some((scan, ch)) = read_key(st) {
+            // UEFI scan codes: 0x01 up, 0x02 down, 0x17 Esc.
+            let key = match (scan, ch) {
+                (0x01, _) => Some(Key::Up),
+                (0x02, _) => Some(Key::Down),
+                (0x17, _) => Some(Key::Esc),
+                (_, 0x0D) => Some(Key::Enter),
+                (_, 0x09) => Some(Key::Tab),
+                (_, 0x08) => Some(Key::Backspace),
+                (_, c) if (0x20..0x7F).contains(&c) => Some(Key::Char(c as u8)),
+                _ => None,
+            };
+            if let Some(k) = key {
+                outcome = login.key(k);
+                if k == Key::Enter && login.error && outcome == Outcome::Redraw {
+                    warn!("login", "wrong user name or password");
+                }
+            }
+        }
+        match outcome {
+            Outcome::SignedIn => {
+                info!("login", "signed in as {}", bedrockos::login::USER);
+                bedrockos::achieve::unlock(bedrockos::achieve::Id::Welcome);
+                draw(&login, true);
+                return;
+            }
+            Outcome::Redraw => draw(&login, true),
+            Outcome::Idle => draw(&login, false),
+        }
+    }
 }
 
 /// Draws the menu on the boot screen (`force` = draw now, not only when a frame is due). Without the

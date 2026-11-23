@@ -35,6 +35,8 @@ pub mod desktop;
 pub mod apps;
 pub mod apps2;
 pub mod browser;
+pub mod login;
+pub mod achieve;
 pub mod battery;
 pub mod calc;
 pub mod tz;

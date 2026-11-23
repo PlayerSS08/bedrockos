@@ -14,6 +14,8 @@ not.** It boots in VirtualBox with an animated boot screen and boot menu, then f
   **Settings** (about, network, live system and task view, display);
 - **Files**, **Network**, **Calculator**, **Clock** (world clocks, stopwatch), **Snake** and the **Crafting Table**
   web browser, all in the dock;
+- a sign-in screen before the boot menu (user `BedrockOS`), Minecraft-style "Achievement get!" toasts
+  (`achievements` lists them) and a wallpaper that follows day and night;
 - Wi-Fi through the laptop (`wifi scan`, `wifi connect`) and https pages for the browser: run
   `python tools/bedrock-host.py` on the laptop while the VM runs;
 - a **command palette** (Ctrl+Space) that opens apps or runs commands;

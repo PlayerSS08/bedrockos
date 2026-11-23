@@ -41,6 +41,20 @@ pub struct MenuView<'a> {
     pub ring: Option<f32>,
 }
 
+/// The sign-in card as the scene draws it.
+#[derive(Clone, Copy, Debug)]
+pub struct LoginView<'a> {
+    pub user: &'a str,
+    /// The password as stars.
+    pub stars: &'a str,
+    /// 0 user name, 1 password.
+    pub field: usize,
+    pub message: &'a str,
+    pub error: bool,
+    /// The text cursor is lit (it blinks).
+    pub caret: bool,
+}
+
 /// Everything that changes between frames.
 #[derive(Clone, Copy, Debug)]
 pub struct View<'a> {
@@ -54,6 +68,8 @@ pub struct View<'a> {
     pub status: &'a str,
     pub show_bar: bool,
     pub menu: Option<MenuView<'a>>,
+    /// The sign-in card (shown instead of the bar and the menu).
+    pub login: Option<LoginView<'a>>,
     /// Small line at the bottom ("Esc: show boot messages").
     pub hint: &'a str,
     /// Whole-screen brightness for the closing fade, 1 = normal, 0 = black.
@@ -62,7 +78,7 @@ pub struct View<'a> {
 
 impl Default for View<'_> {
     fn default() -> Self {
-        View { t_ms: 0, intro: 1.0, progress: 0.0, status: "", show_bar: true, menu: None, hint: "", fade: 1.0 }
+        View { t_ms: 0, intro: 1.0, progress: 0.0, status: "", show_bar: true, menu: None, login: None, hint: "", fade: 1.0 }
     }
 }
 
@@ -210,6 +226,7 @@ pub struct Scene {
     /// Hash of the menu content last drawn; the whole card is redrawn only when it changes.
     menu_key: u64,
     hint_was: bool,
+    login_was: bool,
 }
 
 /// FNV-1a over what the menu card shows, except the countdown ring.
@@ -262,6 +279,7 @@ impl Scene {
             menu_was_shown: false,
             menu_key: 0,
             hint_was: false,
+            login_was: false,
         };
         for i in 0..n {
             sc.star_boxes[i] = sc.star_box(i);
@@ -327,7 +345,7 @@ impl Scene {
                 }
             }
         }
-        let menu_shown = v.menu.is_some();
+        let menu_shown = v.menu.is_some() || v.login.is_some();
         let hint_now = !v.hint.is_empty();
         if full || v.fade < 1.0 {
             dirty.clear();
@@ -336,6 +354,13 @@ impl Scene {
             dirty.add(self.layout.logo_box);
             if v.show_bar && !menu_shown {
                 dirty.add(self.layout.bar_box);
+            }
+            if v.login.is_some() || self.login_was {
+                // The card is small; redraw it every frame (the cursor blinks, the text changes).
+                dirty.add(self.layout.card_box());
+                if v.login.is_none() {
+                    dirty.add(self.layout.bar_box);
+                }
             }
             match &v.menu {
                 Some(m) => {
@@ -358,7 +383,8 @@ impl Scene {
                 dirty.add(self.layout.hint_box());
             }
         }
-        self.menu_was_shown = menu_shown;
+        self.menu_was_shown = v.menu.is_some();
+        self.login_was = v.login.is_some();
         self.menu_key = v.menu.as_ref().map_or(0, menu_key);
         self.hint_was = hint_now;
         let screen = c.bounds();
@@ -404,12 +430,17 @@ impl Scene {
         if !l.logo_box.intersect(&r).is_empty() {
             self.paint_logo(c, v, t);
         }
-        if v.show_bar && v.menu.is_none() && !l.bar_box.intersect(&r).is_empty() {
+        if v.show_bar && v.menu.is_none() && v.login.is_none() && !l.bar_box.intersect(&r).is_empty() {
             self.paint_bar(c, v, t);
         }
         if let Some(m) = &v.menu {
             if !l.card_box().intersect(&r).is_empty() {
                 self.paint_menu(c, m);
+            }
+        }
+        if let Some(lv) = &v.login {
+            if !l.card_box().intersect(&r).is_empty() {
+                self.paint_login(c, lv);
             }
         }
         if !v.hint.is_empty() && !l.hint_box().intersect(&r).is_empty() {
@@ -545,6 +576,46 @@ impl Scene {
         if dots {
             c.text(f, b.x + sw, ty, "...", DARK.text_dim, a);
         }
+    }
+
+    fn paint_login(&self, c: &mut Canvas, lv: &LoginView) {
+        let l = &self.layout;
+        let card = l.card;
+        let (x, y, w, h) = (card.x as f32, card.y as f32, card.w as f32, card.h as f32);
+        c.shadow(x, y + 6.0, w, h, 16.0, 26.0, 0, 0.55);
+        c.round_rect_vgrad(x, y, w, h, 16.0, rgb(30, 36, 58), rgb(22, 27, 44), 0.92);
+        c.round_rect_stroke(x + 0.5, y + 0.5, w - 1.0, h - 1.0, 16.0, 1.0, rgb(80, 94, 132), 0.7);
+        let f = text_face(l.big_text);
+        let small = &gfont::SANS_16;
+        let mut iy = card.y + 20;
+        let title = "Sign in to BedrockOS";
+        let tw = canvas::text_width(f, title, 0);
+        c.text(f, card.x + (card.w - tw) / 2, iy, title, DARK.text, 1.0);
+        c.text(f, card.x + (card.w - tw) / 2 + 1, iy, title, DARK.text, 1.0);
+        iy += f.height as i32 + 16;
+        for (i, (label, value)) in [("User name", lv.user), ("Password", lv.stars)].iter().enumerate() {
+            let focused = i == lv.field;
+            c.text(small, card.x + 28, iy, label, if focused { DARK.accent } else { DARK.text_dim }, 1.0);
+            iy += small.height as i32 + 6;
+            let b = Rect::new(card.x + 24, iy, card.w - 48, l.item_h);
+            c.round_rect(b.x as f32, b.y as f32, b.w as f32, b.h as f32, 8.0, rgb(14, 17, 28), 0.95);
+            let edge = if focused { DARK.accent } else { rgb(70, 80, 110) };
+            c.round_rect_stroke(b.x as f32 + 0.5, b.y as f32 + 0.5, b.w as f32 - 1.0, b.h as f32 - 1.0, 8.0, if focused { 1.5 } else { 1.0 }, edge, 1.0);
+            let ty = b.y + (b.h - f.height as i32) / 2;
+            let shown = fit_text(f, value, b.w - 40).0;
+            let vw = c.text(f, b.x + 14, ty, shown, DARK.text, 1.0);
+            if focused && lv.caret {
+                c.fill_rect(Rect::new(b.x + 15 + vw, b.y + 7, 2, b.h - 14), DARK.accent);
+            }
+            iy += l.item_h + 14;
+        }
+        let col = if lv.error { rgb(255, 128, 116) } else { DARK.text_dim };
+        let mw = canvas::text_width(small, lv.message, 0);
+        c.text(small, card.x + (card.w - mw) / 2, iy, lv.message, col, 1.0);
+        iy += small.height as i32 + 10;
+        let hint = "Tab switches field   Enter signs in";
+        let hw = canvas::text_width(small, hint, 0);
+        c.text(small, card.x + (card.w - hw) / 2, iy, hint, rgb(150, 160, 190), 0.8);
     }
 
     fn paint_menu(&self, c: &mut Canvas, m: &MenuView) {

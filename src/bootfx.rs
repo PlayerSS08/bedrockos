@@ -204,6 +204,21 @@ pub fn menu_frame(view: &MenuView, force: bool) {
     render(false, Some(view));
 }
 
+/// Draws the sign-in card over the animation (a frame is drawn when due, or at once with `force`).
+pub fn login_frame(view: &crate::bootscene::LoginView, force: bool) {
+    if !active() {
+        return;
+    }
+    let s = state();
+    if !force && s.drawn_once && us_since(s.last_frame) < FRAME_US {
+        return;
+    }
+    if let Some(sc) = s.scene.as_mut() {
+        sc.set_menu_items(5);
+    }
+    render_view(false, None, Some(view), 1.0);
+}
+
 /// The boot is done: the bar fills, holds briefly, and the screen fades to black (about 0.5 s in all).
 pub fn finish() {
     if !active() {
@@ -283,6 +298,10 @@ struct Desk {
     watch_at: u64,
     /// The hover tip shown under the top bar: which spot (0 network, 1 battery, 2 clock) and where it is.
     tip: Option<(usize, Rect)>,
+    /// The achievement toast on screen and when it appeared.
+    toast: Option<(&'static str, u64)>,
+    /// Wallpaper brightness (day and night), see [`daylight`].
+    bright: u32,
     /// The command palette, while open (Ctrl+Space).
     palette: Option<Palette>,
     /// Size of each maximised window before it was maximised.
@@ -366,6 +385,8 @@ fn enter_desktop() -> bool {
             maxed: [None; crate::wm::N],
             palette: None,
             tip: None,
+            toast: None,
+            bright: daylight(),
             settings_at: 0,
             msg: String::new(),
             msg_at: None,
@@ -382,7 +403,7 @@ fn enter_desktop() -> bool {
     {
         // SAFETY: single-threaded boot path; BACKDROP is only read from now on.
         let bd = unsafe { BACKDROP.get() };
-        let picture = picture_into(wallimg::DESK, &mut bd[..w * h], w, h, 240);
+        let picture = picture_into(wallimg::DESK, &mut bd[..w * h], w, h, daylight());
         let Some(mut c) = Canvas::new(&mut bd[..w * h], w, h, w) else { return false };
         if picture {
             desktop::draw_backdrop_over_picture(&mut c, &l);
@@ -413,11 +434,31 @@ fn enter_desktop() -> bool {
     true
 }
 
+/// Wallpaper brightness for the local time of day, like Minecraft's day and night: full in the day, dim at
+/// night, with an hour-long sunrise (6:00-7:00) and sunset (18:00-19:00). In steps of 10, so it changes
+/// only every few minutes.
+fn daylight() -> u32 {
+    crate::tz::local_now().map_or(240, |t| daylight_at(u32::from(t.hour) * 60 + u32::from(t.min)))
+}
+
+/// See [`daylight`]; `min` is minutes after midnight.
+pub fn daylight_at(min: u32) -> u32 {
+    const DAY: u32 = 240;
+    const NIGHT: u32 = 110;
+    let v = match min {
+        0..=359 | 1140.. => NIGHT,
+        360..=419 => NIGHT + (DAY - NIGHT) * (min - 360) / 60,
+        420..=1079 => DAY,
+        _ => DAY - (DAY - NIGHT) * (min - 1080) / 60,
+    };
+    v / 10 * 10
+}
+
 /// Draws the wallpaper picture (or the gradient) and the empty panel into BACKDROP for the current layout.
 fn draw_backdrop_buffer(l: &DeskLayout, w: usize, h: usize) {
     // SAFETY: BACKDROP is only written here (with interrupts off, or on the boot path) and read by `compose`.
     let bd = unsafe { BACKDROP.get() };
-    let picture = picture_into(wallimg::DESK, &mut bd[..w * h], w, h, 240);
+    let picture = picture_into(wallimg::DESK, &mut bd[..w * h], w, h, daylight());
     let Some(mut c) = Canvas::new(&mut bd[..w * h], w, h, w) else { return };
     if picture {
         desktop::draw_backdrop_over_picture(&mut c, l);
@@ -544,6 +585,9 @@ fn compose(d: &mut Desk, fb: &FbInfo, r: Rect) {
         let (lines, tr) = tip_for(d, kind);
         desktop::draw_tip(&mut c, &d.l, tr, &lines);
     }
+    if let Some((title, _)) = d.toast {
+        desktop::draw_toast(&mut c, &d.l, title);
+    }
     let mut open = [false; APPS.len()];
     for &a in d.wm.order() {
         open[a] = true;
@@ -599,6 +643,26 @@ pub fn desk_tick() {
             d.clock_min = min;
             let r = d.l.clock;
             redraw(d, &fb, r);
+            // Day and night: the wallpaper follows the time of day.
+            let b = daylight();
+            if b != d.bright {
+                d.bright = b;
+                draw_backdrop_buffer(&d.l, fb.width, fb.height);
+                redraw(d, &fb, Rect::new(0, 0, fb.width as i32, fb.height as i32));
+            }
+        }
+        // Achievement toasts: each shows for 4 s, then the next one waiting.
+        if d.toast.is_some_and(|(_, at)| us_since(at) >= 4_000_000) {
+            d.toast = None;
+            let r = desktop::toast_rect(&d.l).inflate(desktop::SHADOW);
+            redraw(d, &fb, r);
+        }
+        if d.toast.is_none() {
+            if let Some(t) = crate::achieve::next_toast() {
+                d.toast = Some((t, arch::rdtsc()));
+                let r = desktop::toast_rect(&d.l).inflate(desktop::SHADOW);
+                redraw(d, &fb, r);
+            }
         }
         let up = crate::netdev::link_up();
         if desktop::NET_UP.swap(up, core::sync::atomic::Ordering::Relaxed) != up {
@@ -608,6 +672,9 @@ pub fn desk_tick() {
         // Snake steps every 110 ms while its window is in front; a running stopwatch redraws 10 times a second.
         if d.wm.focused() == Some(SNAKE) && us_since(d.snake_at) >= 110_000 {
             d.snake_at = arch::rdtsc();
+            if d.snake.score >= 5 {
+                crate::achieve::unlock(crate::achieve::Id::Snake);
+            }
             if d.snake.tick() {
                 let r = desktop::app_body(d.wm.rect(SNAKE), d.l.title_h);
                 redraw(d, &fb, r);
@@ -851,6 +918,15 @@ fn set_message(d: &mut Desk, fb: &FbInfo, msg: &str) {
 
 /// Opens `app`'s window (loading its data the first time) or brings it to the front.
 fn open_app(d: &mut Desk, fb: &FbInfo, app: usize) {
+    use crate::achieve::{unlock, Id};
+    if app != CHATBOX {
+        unlock(Id::FirstApp);
+    }
+    match app {
+        FILES => unlock(Id::Explorer),
+        CLOCK => unlock(Id::TimeTraveller),
+        _ => false,
+    };
     match app {
         NOTES if d.notes.is_none() => d.notes = Some(load_notes()),
         FILES => {
@@ -1081,7 +1157,10 @@ fn press(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
             NOTES => d.notes.as_mut().map_or(Effect::None, |n| n.click(body, &f, x, y)),
             TASKS => d.tasks.as_mut().map_or(Effect::None, |t| t.click(body, &f, x, y)),
             SETTINGS => d.settings.click(body, &f, x, y),
-            CALC => d.calc.click(body, x, y),
+            CALC => {
+                crate::achieve::unlock(crate::achieve::Id::Calculator);
+                d.calc.click(body, x, y)
+            }
             BROWSER => {
                 let e = d.browser.click(body, x, y);
                 browser_req(d);
@@ -1101,6 +1180,7 @@ fn press(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
 /// Maximises `app` or restores its size. For ChatBox the console's text grid follows the new size.
 fn toggle_max(d: &mut Desk, fb: &FbInfo, app: usize) {
     let old = d.wm.toggle_max(app, &mut d.maxed);
+    crate::achieve::unlock(crate::achieve::Id::BigWindow);
     if app == CHATBOX {
         let t = d.l.term_in(d.wm.rect(CHATBOX));
         // SAFETY: TERMBUF holds MAX_W * MAX_H pixels, more than any text area on this screen.
@@ -1168,6 +1248,9 @@ pub fn take_browser_request() -> Option<String> {
 pub fn browser_loaded(url: &str, result: Result<(String, String), String>) {
     arch::without_interrupts(|| {
         let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
+        if result.is_ok() {
+            crate::achieve::unlock(crate::achieve::Id::Surfer);
+        }
         d.browser.loaded(url, result);
         if d.wm.is_open(BROWSER) {
             let r = desktop::app_body(d.wm.rect(BROWSER), d.l.title_h);
@@ -1251,6 +1334,15 @@ pub fn desk_key(k: Key) -> bool {
             // No window open: the keys would go to a hidden shell, so they are dropped.
             return true;
         };
+        match (app, k) {
+            (NOTES, Key::Char(_)) => {
+                crate::achieve::unlock(crate::achieve::Id::Writer);
+            }
+            (CALC, Key::Enter | Key::Char(b'=')) => {
+                crate::achieve::unlock(crate::achieve::Id::Calculator);
+            }
+            _ => {}
+        }
         let e = match app {
             NOTES => d.notes.as_mut().map_or(Effect::None, |n| n.key(k)),
             TASKS => d.tasks.as_mut().map_or(Effect::None, |t| t.key(k)),
@@ -1364,14 +1456,14 @@ pub fn to_log(reason: &str) {
 }
 
 fn render_faded(fade: f32) {
-    render_view(false, None, fade);
+    render_view(false, None, None, fade);
 }
 
 fn render(full: bool, menu: Option<&MenuView>) {
-    render_view(full, menu, 1.0);
+    render_view(full, menu, None, 1.0);
 }
 
-fn render_view(full: bool, menu: Option<&MenuView>, fade: f32) {
+fn render_view(full: bool, menu: Option<&MenuView>, login: Option<&crate::bootscene::LoginView>, fade: f32) {
     let s = state();
     let Some(fb) = s.fb else { return };
     let now = arch::rdtsc();
@@ -1391,7 +1483,8 @@ fn render_view(full: bool, menu: Option<&MenuView>, fade: f32) {
         status,
         show_bar: true,
         menu: menu.copied(),
-        hint: if menu.is_some() { "" } else { s.hint },
+        login: login.copied(),
+        hint: if menu.is_some() || login.is_some() { "" } else { s.hint },
         fade,
     };
     let (w, h) = (fb.width, fb.height);
