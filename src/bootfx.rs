@@ -25,6 +25,7 @@ use crate::pointer::{self, Pointer, Texel};
 use crate::fb::Console;
 use crate::global::Global;
 use crate::gui::canvas::{Canvas, Rect};
+use crate::gui::wallimg;
 use crate::log;
 use crate::logfmt::Level;
 use crate::pixel::PixelFormat;
@@ -100,6 +101,18 @@ pub fn start(fb: &FbInfo, seed: u64) -> bool {
     let s = state();
     s.fb = Some(*fb);
     s.scene = Some(Scene::new(fb.width, fb.height, seed));
+    {
+        let (w, h) = (fb.width, fb.height);
+        // SAFETY: single-threaded boot path; BOOT_BG is written here once and only read afterwards.
+        let bg = unsafe { BOOT_BG.get() };
+        if picture_into(wallimg::BOOT, &mut bg[..w * h], w, h, 200) {
+            // SAFETY: as above; the slice is never written again.
+            let px: &'static [u32] = unsafe { core::slice::from_raw_parts(BOOT_BG.as_ptr() as *const u32, w * h) };
+            if let Some(sc) = s.scene.as_mut() {
+                sc.set_background(px);
+            }
+        }
+    }
     s.t0 = arch::rdtsc();
     s.last_frame = 0;
     s.drawn_once = false;
@@ -235,6 +248,22 @@ pub fn finish() {
 static TERMBUF: Global<[u32; MAX_W * MAX_H]> = Global::new([0; MAX_W * MAX_H]);
 /// The wallpaper and empty panel, drawn once (copying it is much cheaper than drawing the glows again).
 static BACKDROP: Global<[u32; MAX_W * MAX_H]> = Global::new([0; MAX_W * MAX_H]);
+/// A decoded background picture (before scaling), and the boot screen's background at screen size.
+static PICTURE: Global<[u32; wallimg::SRC_PIXELS]> = Global::new([0; wallimg::SRC_PIXELS]);
+static BOOT_BG: Global<[u32; MAX_W * MAX_H]> = Global::new([0; MAX_W * MAX_H]);
+
+/// Decodes background picture `qoi` and scales it to cover `dst` (`w` x `h`). False if it does not decode.
+fn picture_into(qoi: &[u8], dst: &mut [u32], w: usize, h: usize, bright: u32) -> bool {
+    // SAFETY: single-threaded boot path; PICTURE is only used here, one call at a time.
+    let src = unsafe { PICTURE.get() };
+    match wallimg::qoi_decode(qoi, &mut src[..]) {
+        Some((sw, sh)) => {
+            wallimg::cover(&src[..sw * sh], sw, sh, dst, w, h, bright);
+            true
+        }
+        None => false,
+    }
+}
 
 struct Desk {
     l: DeskLayout,
@@ -345,8 +374,13 @@ fn enter_desktop() -> bool {
     {
         // SAFETY: single-threaded boot path; BACKDROP is only read from now on.
         let bd = unsafe { BACKDROP.get() };
+        let picture = picture_into(wallimg::DESK, &mut bd[..w * h], w, h, 240);
         let Some(mut c) = Canvas::new(&mut bd[..w * h], w, h, w) else { return false };
-        desktop::draw_backdrop(&mut c, &l);
+        if picture {
+            desktop::draw_backdrop_over_picture(&mut c, &l);
+        } else {
+            desktop::draw_backdrop(&mut c, &l);
+        }
     }
     let Some(d) = desk() else { return false };
     compose(d, &fb, full);

@@ -197,6 +197,11 @@ pub fn draw_backdrop(c: &mut Canvas, l: &DeskLayout) {
     panel(c, l);
 }
 
+/// The panel over a background picture the kernel has already put on the canvas.
+pub fn draw_backdrop_over_picture(c: &mut Canvas, l: &DeskLayout) {
+    panel(c, l);
+}
+
 /// The clock and message text of the panel, drawn over [`draw_backdrop`].
 pub fn draw_panel_text(c: &mut Canvas, l: &DeskLayout, clock: &str, msg: &str) {
     if l.panel.intersect(&c.clip()).is_empty() {

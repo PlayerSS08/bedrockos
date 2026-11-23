@@ -157,6 +157,10 @@ def boot_at(res, r, keep):
     if os.path.exists(SERIAL):
         os.remove(SERIAL)
     vb("startvm", VM, "--type", "headless")
+    # The boot menu waits for a choice: press Enter on "Boot BedrockOS" once it is open.
+    if wait_for(["menu open"], 60)[0]:
+        time.sleep(1.0)
+        vb("controlvm", VM, "keyboardputscancode", "1c", "9c", check=False)
     ok, t = wait_for(["BedrockOS", "boot complete"], 90)
     r.check(f"{res}: serial shows 'boot complete'", ok, f"{t:.1f} s")
     ok2, _ = wait_for(["BedrockOS shell"], 20)

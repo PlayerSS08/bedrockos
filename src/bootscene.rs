@@ -200,6 +200,8 @@ impl Dirty {
 pub struct Scene {
     pub layout: Layout,
     stars: [Star; MAX_STARS],
+    /// A background picture at screen size (rows packed), drawn instead of the gradient.
+    bg: Option<&'static [u32]>,
     star_boxes: [Rect; MAX_STARS],
     n_stars: usize,
     last_t: u32,
@@ -252,6 +254,7 @@ impl Scene {
         let mut sc = Scene {
             layout: Layout::new(w, h, 6),
             stars,
+            bg: None,
             star_boxes: [Rect::default(); MAX_STARS],
             n_stars: n,
             last_t: 0,
@@ -267,6 +270,14 @@ impl Scene {
     }
 
     /// Re-lays out for a menu with `items` entries.
+    /// Draws `px` (the screen's size, rows packed) behind everything instead of the gradient.
+    pub fn set_background(&mut self, px: &'static [u32]) {
+        let (w, h) = (self.layout.w as usize, self.layout.h as usize);
+        if px.len() >= w * h {
+            self.bg = Some(px);
+        }
+    }
+
     pub fn set_menu_items(&mut self, items: usize) {
         let items = items.min(MAX_MENU_ITEMS);
         if items != self.menu_items {
@@ -365,9 +376,14 @@ impl Scene {
     fn paint(&self, c: &mut Canvas, v: &View, r: Rect) {
         c.set_clip(r);
         let t = v.t_ms as f32 / 1000.0;
-        let (top, bottom) = (DARK.bg_top, DARK.bg_bottom);
-        let hh = self.layout.h.max(1) as u32;
-        c.fill_rows(r, |y| canvas::mix256(top, bottom, y.max(0) as u32 * 256 / hh));
+        if let Some(bg) = self.bg {
+            let (w, h) = (self.layout.w, self.layout.h);
+            c.copy_from(0, 0, w, h, bg, w as usize);
+        } else {
+            let (top, bottom) = (DARK.bg_top, DARK.bg_bottom);
+            let hh = self.layout.h.max(1) as u32;
+            c.fill_rows(r, |y| canvas::mix256(top, bottom, y.max(0) as u32 * 256 / hh));
+        }
 
         // Stars.
         for i in 0..self.n_stars {

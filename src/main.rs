@@ -699,12 +699,17 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, opts: Bo
     }
     // SAFETY: con_in is a live protocol (checked non-null); resetting also drops stale keystrokes.
     unsafe { ((*st.con_in).reset)(st.con_in, false) };
-    info!("menu", "menu open: boot starts in {} s (arrow keys choose another entry, Enter selects, any other key stops the countdown)", opts.menu_timeout);
+    let wait = opts.menu_timeout == bedrockos::bootopts::WAIT;
+    if wait {
+        info!("menu", "menu open: waiting for a choice (arrow keys choose an entry, Enter selects)");
+    } else {
+        info!("menu", "menu open: boot starts in {} s (arrow keys choose another entry, Enter selects, any other key stops the countdown)", opts.menu_timeout);
+    }
     info!("menu", "options: Boot BedrockOS | Recovery | Safe mode (no network) | Firmware setup | Restart | Power off");
     // The menu reads keys itself; the boot screen's Esc/V check would steal them.
     bootfx::set_key_poll(None);
     let hz = u128::from(log::tsc_hz().max(1));
-    let mut menu = Menu::new(opts.menu_timeout);
+    let mut menu = Menu::new(if wait { 0 } else { opts.menu_timeout });
     let mut last = bedrockos::arch::rdtsc();
     draw_menu(&menu, true);
     let entry = loop {

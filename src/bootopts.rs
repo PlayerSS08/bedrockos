@@ -7,7 +7,7 @@ pub struct BootOpts {
     pub quiet: bool,
     /// Show trace-level messages.
     pub debug: bool,
-    /// Seconds to wait for a key before booting (0 skips the boot menu).
+    /// Seconds to wait for a key before booting (0 skips the boot menu, [`WAIT`] waits for Enter).
     pub menu_timeout: u8,
     /// Show the log on screen during boot instead of the logo and progress bar.
     pub verbose: bool,
@@ -23,8 +23,10 @@ pub struct BootOpts {
     pub tz: Option<i32>,
 }
 
-/// Seconds the menu waits before it starts the highlighted entry. Long enough to read and decide.
-pub const DEFAULT_TIMEOUT: u8 = 15;
+/// `timeout=wait`: the menu stays until an entry is chosen with Enter (nothing starts by itself).
+pub const WAIT: u8 = u8::MAX;
+/// By default the menu waits for the user.
+pub const DEFAULT_TIMEOUT: u8 = WAIT;
 pub const MAX_TIMEOUT: u8 = 30;
 
 impl Default for BootOpts {
@@ -33,7 +35,8 @@ impl Default for BootOpts {
     }
 }
 
-/// Parses space-separated words: `quiet`, `debug`, `nomenu`, `timeout=N`. Unknown words are ignored.
+/// Parses space-separated words: `quiet`, `debug`, `nomenu`, `timeout=N` or `timeout=wait`. Unknown words are
+/// ignored.
 pub fn parse(cmdline: &str) -> BootOpts {
     let mut o = BootOpts::default();
     for w in cmdline.split_whitespace() {
@@ -41,6 +44,7 @@ pub fn parse(cmdline: &str) -> BootOpts {
             "quiet" => o.quiet = true,
             "debug" => o.debug = true,
             "nomenu" => o.menu_timeout = 0,
+            "timeout=wait" => o.menu_timeout = WAIT,
             "verbose" => o.verbose = true,
             "recovery" => o.recovery = true,
             "nocount" => o.nocount = true,
@@ -142,7 +146,7 @@ mod fuzz {
                 }
             }
             let o = parse(&line);
-            assert!(o.menu_timeout <= MAX_TIMEOUT);
+            assert!(o.menu_timeout <= MAX_TIMEOUT || o.menu_timeout == WAIT);
             assert!(!(o.quiet && o.debug));
         }
     }
@@ -163,6 +167,8 @@ mod tests {
         assert!(o.quiet && !o.debug);
         assert_eq!(o.menu_timeout, 7);
         assert_eq!(parse("nomenu").menu_timeout, 0);
+        assert_eq!(parse("timeout=wait").menu_timeout, WAIT);
+        assert_eq!(parse("").menu_timeout, WAIT, "the menu waits by default");
         assert_eq!(parse("tz=+05:30").tz, Some(330));
         assert_eq!(parse("tz=junk").tz, None);
     }
