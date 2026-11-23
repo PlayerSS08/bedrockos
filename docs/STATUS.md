@@ -34,7 +34,9 @@ Last update: 2026-11-23, milestone 3 (first part).
 | Shell inside the Terminal window (keyboard input, scrolling, status bar) | done | VirtualBox: inherited console placed in the window rectangle |
 | Panel clock | partial: shows **UTC** (no time zone setting yet), updates every minute | VirtualBox screenshot; minute change not watched |
 | Window manager: move, resize, focus, several windows | not done | rest of milestone 3 |
-| Mouse on the desktop | **not working yet** | VirtualBox, tried both pointing devices: USB tablet (the VM default) is reported "not supported"; USB mouse (`--mouse usb`) fails during setup with "control transfer failed" in the inherited xHCI driver. To fix in the rest of milestone 3. The keyboard works |
+| USB mouse in VirtualBox | done | Fixed the inherited xHCI driver: VirtualBox's USB mouse stalls SET_PROTOCOL and SET_IDLE; endpoint 0 is now reset after a stall and the mouse is used anyway. Checked: `USB mouse ready` in the log; movement injected with the VirtualBox COM API (`PutMouseEvent`) arrives as reports and moves the pointer (`mouse` command and screenshot) |
+| Mouse pointer | partial: works **inside the Terminal window only**; not on the panel or wallpaper. A small leftover pointer fragment can stay behind when text is drawn under the pointer (inherited console code) | VirtualBox, as above |
+| VirtualBox USB tablet (absolute pointer, the VirtualBox default) | not done: no tablet driver, so the scripts set the VM to a USB mouse (click into the VM window to capture it, Right Ctrl releases) | — |
 | Apps: Notes, Tasks, Browser, Wi-Fi, Settings | not done | milestones 4–10 |
 | Notes / tasks persistence | not done | milestone 5–6 |
 | Network manager, own Wi-Fi, simulated AP | not done | milestone 8 |

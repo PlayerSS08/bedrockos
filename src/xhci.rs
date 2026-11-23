@@ -33,6 +33,9 @@ use crate::xhcireg::{self as reg, Caps};
 use crate::xhcitrb::{EventRing, ProducerRing, Trb, CC_SHORT_PACKET, CC_SUCCESS, TRB_COMMAND_COMPLETION, TRB_TRANSFER_EVENT};
 use crate::{arch, log, paging, pci};
 
+/// Transfer completion code: the device stalled the request.
+const CC_STALL: u8 = 6;
+
 /// TRBs per ring: one 4 KiB frame holds 256 of 16 bytes.
 const RING_TRBS: usize = 256;
 /// Most device slots this driver asks the controller for.
@@ -503,7 +506,14 @@ impl Xhci {
         match event.map(|e| e.completion_code()) {
             Some(CC_SUCCESS | CC_SHORT_PACKET) => Ok(()),
             Some(code) => {
-                warn!("xhci", "control transfer on slot {} failed with completion code {}", dev.slot, code);
+                warn!("xhci", "control transfer on slot {} (request type {:#04x}, request {}) failed with completion code {}", dev.slot, packet[0], packet[1], code);
+                if code == CC_STALL {
+                    // A stall halts endpoint 0 in the controller: reset it so the next request can run. (The
+                    // device clears a control stall by itself at the next setup packet.)
+                    dev.ep0.reset();
+                    let _ = self.command(Trb::reset_endpoint(dev.slot, 1));
+                    let _ = self.command(Trb::set_tr_dequeue_pointer(dev.ep0.base(), dev.slot, 1, true));
+                }
                 Err("control transfer failed")
             }
             None => Err("control transfer timed out"),
@@ -526,7 +536,11 @@ impl Xhci {
         let csz = self.caps.context_size();
         // Configuration, boot protocol, and no idle repeats from the device.
         self.control(dev, [0x00, 9, hid.config, 0, 0, 0, 0, 0], None)?;
-        self.control(dev, [0x21, 0x0B, 0, 0, hid.interface, 0, 0, 0], None)?;
+        // SET_PROTOCOL(boot). Some devices refuse it (VirtualBox's USB mouse stalls); they send boot-format
+        // reports anyway, so carry on.
+        if self.control(dev, [0x21, 0x0B, 0, 0, hid.interface, 0, 0, 0], None).is_err() {
+            info!("xhci", "slot {}: SET_PROTOCOL refused; using the device's reports as they come", slot);
+        }
         let _ = self.control(dev, [0x21, 0x0A, 0, 0, hid.interface, 0, 0, 0], None); // stalls on some devices: fine
 
         // Tell the controller about the interrupt IN endpoint.
