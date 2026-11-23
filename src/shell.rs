@@ -3711,6 +3711,11 @@ pub extern "C" fn shell_task(_: usize) {
                 }
             });
         }
+        // Notes and tasks changed on the desktop are saved to the USB stick like files changed by commands.
+        if crate::bootfx::take_persist() {
+            persist_save(false);
+            crate::bootfx::persist_done(files_only_in_memory());
+        }
         // A foreground program that has ended gives the prompt back; finished background ones are announced.
         if let Some(code) = usermode::foreground_done() {
             if code != 0 {
@@ -3734,6 +3739,10 @@ pub extern "C" fn shell_task(_: usize) {
             } else {
                 break;
             };
+            // On the desktop, keys go to the window in front (Notes, Tasks, Help); ChatBox's go on to the shell.
+            if crate::bootfx::desktop_active() && crate::bootfx::desk_key(key) {
+                continue;
+            }
             if usermode::has_foreground() {
                 // Keys go to the running program, line by line, like a terminal.
                 match key {
@@ -3861,9 +3870,16 @@ pub extern "C" fn shell_task(_: usize) {
     }
 }
 
-/// Redraws the status bar twice a second.
+/// Redraws the status bar twice a second, and keeps the desktop current about 30 times a second.
 pub extern "C" fn status_task(_: usize) {
     loop {
+        #[cfg(target_os = "uefi")]
+        for _ in 0..15 {
+            crate::bootfx::desk_tick();
+            sched::sleep_ms(33);
+        }
+        #[cfg(not(target_os = "uefi"))]
+        sched::sleep_ms(500);
         let secs = log::uptime_us() / 1_000_000;
         let back = log::with_console(|c| c.scrolled()).unwrap_or(0);
         let mut line = LineBuf::<256>::new();
@@ -3891,10 +3907,12 @@ pub extern "C" fn status_task(_: usize) {
         let bytes = line.finish();
         let bytes = &bytes[..bytes.len() - 1];
         log::with_console(|c| c.status(bytes));
-        #[cfg(target_os = "uefi")]
-        crate::bootfx::panel_tick();
-        sched::sleep_ms(500);
     }
+}
+
+/// True when the last save to the USB stick failed (the files are only in memory).
+pub fn files_only_in_memory() -> bool {
+    UNSAVED.load(core::sync::atomic::Ordering::Relaxed)
 }
 
 fn task_count() -> usize {

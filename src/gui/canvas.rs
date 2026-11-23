@@ -291,6 +291,18 @@ impl<'a> Canvas<'a> {
         self.fill_rows(r, |_| c);
     }
 
+    /// Copies a `w` x `h` picture (`src`, `src_stride` pixels per row) with its top-left corner at (`x`, `y`),
+    /// inside the clip only. Pixels outside `src` are left alone.
+    pub fn copy_from(&mut self, x: i32, y: i32, w: i32, h: i32, src: &[u32], src_stride: usize) {
+        let r = Rect::new(x, y, w, h).intersect(&self.clip);
+        for yy in r.y..r.bottom() {
+            let s = (yy - y) as usize * src_stride + (r.x - x) as usize;
+            let Some(from) = src.get(s..s + r.w as usize) else { return };
+            let d = yy as usize * self.stride + r.x as usize;
+            self.px[d..d + r.w as usize].copy_from_slice(from);
+        }
+    }
+
     pub fn blend_rect(&mut self, r: Rect, c: Color, a: f32) {
         let a = unit256(a);
         self.shade(r, |_, _, old| mix256(old, c, a));

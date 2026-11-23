@@ -2,7 +2,8 @@
 //! inside is left to the text console. Pure: it draws into a [`Canvas`]; the kernel copies the result to
 //! the screen and places the console in [`DeskLayout::term`].
 //!
-//! Milestone 3 (first part): one fixed window. Moving, resizing and more apps come later.
+//! Every function draws only inside the canvas clip, so the kernel can redraw any damaged rectangle by
+//! drawing the whole scene clipped to it (wallpaper, panel, windows bottom to top, dock).
 
 use crate::gfont;
 use crate::gui::canvas::{self, rgb, Canvas, Color, Rect};
@@ -36,17 +37,37 @@ pub struct DeskLayout {
 
 /// The apps of the dock, in order, and the milestone that builds each one (`None` = available now).
 pub const APPS: [(&str, Option<u8>); 7] = [
-    ("Notes", Some(6)),
-    ("Tasks", Some(6)),
+    ("Notes", None),
+    ("Tasks", None),
     ("Browser", Some(9)),
     ("ChatBox", None),
     ("Wi-Fi", Some(8)),
     ("Settings", Some(10)),
-    ("Help", Some(10)),
+    ("Help", None),
 ];
 
-/// Index of ChatBox (the window holding the shell) in [`APPS`].
+/// Indexes into [`APPS`]. ChatBox is the window holding the shell.
+pub const NOTES: usize = 0;
+pub const TASKS: usize = 1;
 pub const CHATBOX: usize = 3;
+pub const HELP: usize = 6;
+
+/// The title bar of a window at `win` with title-bar height `th`.
+pub fn title_bar(win: Rect, th: i32) -> Rect {
+    Rect::new(win.x, win.y, win.w, th)
+}
+
+/// The three title-bar buttons of a window, left to right: minimise, maximise, close.
+pub fn title_buttons(win: Rect, th: i32) -> [Rect; 3] {
+    let bw = th * 3 / 2;
+    let right = win.right() - 1;
+    [2, 1, 0].map(|k| Rect::new(right - (k + 1) * bw, win.y + 1, bw, th - 2))
+}
+
+/// The inside of an app window below its title bar.
+pub fn app_body(win: Rect, th: i32) -> Rect {
+    Rect::new(win.x + 1, win.y + th, win.w - 2, win.h - th - 1)
+}
 
 impl DeskLayout {
     pub fn new(w: usize, h: usize) -> DeskLayout {
@@ -75,8 +96,31 @@ impl DeskLayout {
         DeskLayout { w: wi, h: hi, panel, window, title_h, body, term, clock, dock, icon, message }
     }
 
-    fn big(&self) -> bool {
+    pub fn big(&self) -> bool {
         self.w >= 1600
+    }
+
+    /// Where windows may be: below the panel, above the dock.
+    pub fn area(&self) -> Rect {
+        Rect::new(0, self.panel.bottom(), self.w, self.dock.y - self.panel.bottom())
+    }
+
+    /// Where each app's window opens: ChatBox fills the main area, the others are smaller and cascade.
+    pub fn app_rects(&self) -> [Rect; APPS.len()] {
+        let mut r = [self.window; APPS.len()];
+        let (w, h) = (self.window.w * 2 / 3, self.window.h * 4 / 5);
+        for (k, &app) in [NOTES, TASKS, HELP, 2, 4, 5].iter().enumerate() {
+            let k = k as i32;
+            let x = (self.window.x + self.window.w / 3 - 40 + k * 44).min(self.w - w);
+            let y = (self.window.y + 16 + k * 32).min(self.dock.y - h);
+            r[app] = Rect::new(x, y, w, h);
+        }
+        r
+    }
+
+    /// Where the console's text goes when the ChatBox window is at `win`.
+    pub fn term_in(&self, win: Rect) -> Rect {
+        Rect::new(self.term.x + win.x - self.window.x, self.term.y + win.y - self.window.y, self.term.w, self.term.h)
     }
 
     /// The tile of dock icon `i`.
@@ -88,9 +132,7 @@ impl DeskLayout {
 
     /// The three title-bar buttons, left to right: minimise, maximise, close (full title-bar height).
     pub fn title_buttons(&self) -> [Rect; 3] {
-        let bw = self.title_h * 3 / 2;
-        let right = self.window.right() - 1;
-        [2, 1, 0].map(|k| Rect::new(right - (k + 1) * bw, self.window.y + 1, bw, self.title_h - 2))
+        title_buttons(self.window, self.title_h)
     }
 
     /// Which dock icon is at (`x`, `y`), if any.
@@ -100,7 +142,7 @@ impl DeskLayout {
 
     /// The title bar, where the window is grabbed to move it.
     pub fn title_bar(&self) -> Rect {
-        Rect::new(self.window.x, self.window.y, self.window.w, self.title_h)
+        title_bar(self.window, self.title_h)
     }
 
     /// The same layout with the window's top-left corner moved to (`x`, `y`), kept fully on screen and below
@@ -112,56 +154,46 @@ impl DeskLayout {
         let shift = |r: Rect| Rect::new(r.x + dx, r.y + dy, r.w, r.h);
         DeskLayout { window: shift(self.window), body: shift(self.body), term: shift(self.term), ..*self }
     }
-
-    /// Who draws the pointer at screen position (`x`, `y`): the console (over the terminal text, with the
-    /// position in console coordinates) or the desktop (everywhere else).
-    pub fn zone(&self, x: i32, y: i32) -> Zone {
-        if self.term.contains(x, y) {
-            Zone::Terminal { x: x - self.term.x, y: y - self.term.y }
-        } else {
-            Zone::Desktop
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Zone {
-    Terminal { x: i32, y: i32 },
-    Desktop,
-}
-
-/// Whether the desktop may paint pointer pixel (`x`, `y`): on screen and outside the terminal text area,
-/// which belongs to the console.
-pub fn desktop_owns(l: &DeskLayout, x: i32, y: i32) -> bool {
-    x >= 0 && y >= 0 && x < l.w && y < l.h && !l.term.contains(x, y)
 }
 
 fn face(big: bool) -> &'static gfont::Face {
     if big { &gfont::SANS_24 } else { &gfont::SANS_16 }
 }
 
-/// Draws the whole desktop. The console then paints the inside of the window.
+/// Draws the start-up desktop (ChatBox open, nothing else) in one go; previews and tests use it.
 pub fn draw(c: &mut Canvas, l: &DeskLayout, clock: &str) {
     c.reset_clip();
-    wallpaper(c, l);
-    panel(c, l, clock);
-    window_frame(c, l, "ChatBox");
-    dock(c, l);
+    draw_base(c, l, clock, "");
+    draw_window(c, l, l.window, CHATBOX, true);
+    let mut open = [false; APPS.len()];
+    open[CHATBOX] = true;
+    draw_dock(c, l, &open);
 }
 
-fn dock(c: &mut Canvas, l: &DeskLayout) {
+/// Wallpaper and the top panel with its clock and message, inside the current clip.
+pub fn draw_base(c: &mut Canvas, l: &DeskLayout, clock: &str, msg: &str) {
+    wallpaper(c, l);
+    panel(c, l, clock, msg);
+}
+
+/// The dock, with a dot under every app whose window is open.
+pub fn draw_dock(c: &mut Canvas, l: &DeskLayout, open: &[bool; APPS.len()]) {
     let d = l.dock;
+    if d.intersect(&c.clip()).is_empty() {
+        return;
+    }
     let (x, y, w, h) = (d.x as f32, d.y as f32, d.w as f32, d.h as f32);
     let r = l.icon as f32 * 0.4;
     c.shadow(x, y + 4.0, w, h, r, 18.0, 0, 0.45);
     c.round_rect(x, y, w, h, r, rgb(22, 27, 44), 0.82);
     c.round_rect_stroke(x + 0.5, y + 0.5, w - 1.0, h - 1.0, r, 1.0, rgb(70, 82, 116), 0.7);
-    for i in 0..APPS.len() {
-        icon(c, l.dock_item(i), i);
+    for (i, &is_open) in open.iter().enumerate() {
+        let t = l.dock_item(i);
+        icon(c, t, i);
+        if is_open {
+            c.circle(t.x as f32 + t.w as f32 / 2.0, (t.bottom() + (d.bottom() - t.bottom()) / 2) as f32, 2.5, DARK.text, 0.9);
+        }
     }
-    // A dot under the running app.
-    let t = l.dock_item(CHATBOX);
-    c.circle(t.x as f32 + t.w as f32 / 2.0, (t.bottom() + (d.bottom() - t.bottom()) / 2) as f32, 2.5, DARK.text, 0.9);
 }
 
 /// One app icon, drawn from shapes on a coloured rounded tile.
@@ -233,37 +265,21 @@ fn icon(c: &mut Canvas, t: Rect, app: usize) {
     }
 }
 
-/// Shows `msg` in the middle of the panel, or clears that area when it is empty.
-pub fn draw_message(c: &mut Canvas, l: &DeskLayout, msg: &str) {
-    let r = l.message;
-    c.set_clip(r);
-    let hh = l.h.max(1) as u32;
-    let (top, bottom) = (DARK.bg_top, DARK.bg_bottom);
-    c.fill_rows(r, |y| canvas::mix256(top, bottom, y.max(0) as u32 * 256 / hh));
-    let (w, h) = (l.w as f32, l.h as f32);
-    c.glow(w * 0.85, h * 0.2, h * 0.8, DARK.accent, 0.18);
-    c.blend_rect(r, rgb(8, 10, 20), 0.72);
-    c.fill_rect(Rect::new(r.x, l.panel.bottom() - 1, r.w, 1), rgb(48, 58, 86));
-    if !msg.is_empty() {
-        let f = face(l.big());
-        let tw = canvas::text_width(f, msg, 0);
-        c.text(f, r.x + (r.w - tw) / 2, r.y + (l.panel.h - f.height as i32) / 2, msg, DARK.warn, 1.0);
-    }
-    c.reset_clip();
-}
-
 fn wallpaper(c: &mut Canvas, l: &DeskLayout) {
     let hh = l.h.max(1) as u32;
     let (top, bottom) = (DARK.bg_top, DARK.bg_bottom);
-    c.fill_rows(c.bounds(), |y| canvas::mix256(top, bottom, y.max(0) as u32 * 256 / hh));
+    c.fill_rows(c.clip(), |y| canvas::mix256(top, bottom, y.max(0) as u32 * 256 / hh));
     // Two soft colour washes, like the boot screen's glow, so the desktop continues its look.
     let (w, h) = (l.w as f32, l.h as f32);
     c.glow(w * 0.18, h * 0.85, h * 0.75, DARK.accent_2, 0.16);
     c.glow(w * 0.85, h * 0.2, h * 0.8, DARK.accent, 0.18);
 }
 
-fn panel(c: &mut Canvas, l: &DeskLayout, clock: &str) {
+fn panel(c: &mut Canvas, l: &DeskLayout, clock: &str, msg: &str) {
     let p = l.panel;
+    if p.intersect(&c.clip()).is_empty() {
+        return;
+    }
     c.blend_rect(p, rgb(8, 10, 20), 0.72);
     c.fill_rect(Rect::new(0, p.bottom() - 1, p.w, 1), rgb(48, 58, 86));
     let f = face(l.big());
@@ -274,62 +290,72 @@ fn panel(c: &mut Canvas, l: &DeskLayout, clock: &str) {
     c.circle(mx, my, r, DARK.accent, 1.0);
     c.circle(mx, my, r * 0.45, DARK.accent_2, 1.0);
     c.text(f, (mx + r) as i32 + 10, ty, "BedrockOS", DARK.text, 1.0);
-    draw_clock(c, l, clock);
-}
-
-/// Redraws only the clock area of the panel.
-pub fn draw_clock(c: &mut Canvas, l: &DeskLayout, clock: &str) {
     let r = l.clock;
-    c.set_clip(r);
-    // The panel background under the clock: wallpaper, then the same dark wash as `panel`.
-    let hh = l.h.max(1) as u32;
-    let (top, bottom) = (DARK.bg_top, DARK.bg_bottom);
-    c.fill_rows(r, |y| canvas::mix256(top, bottom, y.max(0) as u32 * 256 / hh));
-    let (w, h) = (l.w as f32, l.h as f32);
-    c.glow(w * 0.85, h * 0.2, h * 0.8, DARK.accent, 0.18);
-    c.blend_rect(r, rgb(8, 10, 20), 0.72);
-    c.fill_rect(Rect::new(r.x, l.panel.bottom() - 1, r.w, 1), rgb(48, 58, 86));
-    let f = face(l.big());
     let tw = canvas::text_width(f, clock, 0);
-    c.text(f, r.right() - tw - 8, r.y + (l.panel.h - f.height as i32) / 2, clock, DARK.text, 1.0);
-    c.reset_clip();
+    c.text(f, r.right() - tw - 8, ty, clock, DARK.text, 1.0);
+    if !msg.is_empty() {
+        let m = l.message;
+        let tw = canvas::text_width(f, msg, 0);
+        c.text(f, m.x + (m.w - tw) / 2, ty, msg, DARK.warn, 1.0);
+    }
 }
 
 /// Corner radius of the window: small (not the large rounded Mac look).
 const WIN_R: f32 = 8.0;
 
-fn window_frame(c: &mut Canvas, l: &DeskLayout, title: &str) {
-    let w = l.window;
+/// How far a window's shadow reaches outside it (to redraw that area when the window moves).
+pub const SHADOW: i32 = 34;
+
+/// The window of `app` at `win`: shadow, frame, title bar with icon, name and buttons. The focused window
+/// has a blue accent line and bright title; others are dimmed. ChatBox's body is filled with the console
+/// colour (the kernel copies the console text over it); other apps draw their own body afterwards.
+pub fn draw_window(c: &mut Canvas, l: &DeskLayout, win: Rect, app: usize, focused: bool) {
+    if win.inflate(SHADOW).intersect(&c.clip()).is_empty() {
+        return;
+    }
+    let w = win;
+    let th = l.title_h;
     let (x, y, ww, wh) = (w.x as f32, w.y as f32, w.w as f32, w.h as f32);
-    c.shadow(x, y + 6.0, ww, wh, WIN_R, 26.0, 0, 0.55);
+    c.shadow(x, y + 6.0, ww, wh, WIN_R, 26.0, 0, if focused { 0.6 } else { 0.4 });
     c.round_rect(x, y, ww, wh, WIN_R, rgb(26, 30, 46), 1.0);
     // Title bar: flat, with a thin accent line on top; the app icon and name on the left.
-    c.round_rect(x, y, ww, l.title_h as f32 + WIN_R, WIN_R, rgb(38, 44, 68), 1.0);
-    c.fill_rect(Rect::new(w.x + WIN_R as i32, w.y, w.w - 2 * WIN_R as i32, 2), DARK.accent);
-    c.fill_rect(Rect::new(w.x, w.y + l.title_h - 1, w.w, 1), rgb(52, 60, 86));
-    let is = l.title_h - 12;
+    let bar = if focused { rgb(38, 44, 68) } else { rgb(31, 35, 52) };
+    c.round_rect(x, y, ww, th as f32 + WIN_R, WIN_R, bar, 1.0);
+    c.fill_rect(Rect::new(w.x + WIN_R as i32, w.y, w.w - 2 * WIN_R as i32, 2), if focused { DARK.accent } else { DARK.border });
+    c.fill_rect(Rect::new(w.x, w.y + th - 1, w.w, 1), rgb(52, 60, 86));
+    let is = th - 12;
     let pad = if l.big() { 14 } else { 10 };
-    title_icon(c, w.x + pad, w.y + (l.title_h - is) / 2, is);
+    if app == CHATBOX {
+        title_icon(c, w.x + pad, w.y + (th - is) / 2, is);
+    } else {
+        icon(c, Rect::new(w.x + pad, w.y + (th - is) / 2, is, is), app);
+    }
     let f = face(l.big());
-    c.text(f, w.x + pad + is + pad * 3 / 4, w.y + (l.title_h - f.height as i32) / 2, title, DARK.text, 0.95);
+    let tcol = if focused { DARK.text } else { DARK.text_dim };
+    c.text(f, w.x + pad + is + pad * 3 / 4, w.y + (th - f.height as i32) / 2, APPS[app].0, tcol, 0.95);
     // Minimise, maximise, close: thin line glyphs; close sits on a red square.
-    let b = l.title_buttons();
-    let g = (l.title_h / 4) as f32;
+    let b = title_buttons(w, th);
+    let g = (th / 4) as f32;
     let col = rgb(200, 206, 222);
     let close = b[2];
     // Red square, following the window's rounded top-right corner.
-    c.set_clip(close);
+    let old = c.clip();
+    c.set_clip(old.intersect(&close));
     let (rx, ry) = (close.x as f32 - WIN_R, close.y as f32 - 1.0);
-    c.round_rect(rx, ry, close.w as f32 + WIN_R + 1.0, close.h as f32 + WIN_R + 1.0, WIN_R, rgb(196, 43, 28), 1.0);
-    c.reset_clip();
+    let red = if focused { rgb(196, 43, 28) } else { rgb(120, 46, 40) };
+    c.round_rect(rx, ry, close.w as f32 + WIN_R + 1.0, close.h as f32 + WIN_R + 1.0, WIN_R, red, 1.0);
+    c.set_clip(old);
     let (mx, my) = (b[0].x as f32 + b[0].w as f32 / 2.0, b[0].y as f32 + b[0].h as f32 / 2.0);
     c.fill_rect(Rect::new((mx - g / 2.0) as i32, my as i32, g as i32, 1), col);
     let (qx, qy) = (b[1].x as f32 + b[1].w as f32 / 2.0, b[1].y as f32 + b[1].h as f32 / 2.0);
     c.round_rect_stroke(qx - g / 2.0, qy - g / 2.0, g, g, 1.5, 1.0, col, 1.0);
     let (cx, cy) = (close.x + close.w / 2, close.y + close.h / 2);
-    cross(c, cx, cy, l.title_h / 8, rgb(255, 255, 255));
-    // Body: the console's own background, so the text area lines up with it.
-    c.fill_rect(l.body, TERM_BG);
+    cross(c, cx, cy, th / 8, rgb(255, 255, 255));
+    if app == CHATBOX {
+        // Body: the console's own background, so the text area lines up with it.
+        let body = Rect::new(l.body.x + w.x - l.window.x, l.body.y + w.y - l.window.y, l.body.w, l.body.h);
+        c.fill_rect(body, TERM_BG);
+    }
     c.round_rect_stroke(x + 0.5, y + 0.5, ww - 1.0, wh - 1.0, WIN_R, 1.0, rgb(64, 74, 104), 0.8);
 }
 
@@ -483,7 +509,9 @@ mod tests {
     }
 
     #[test]
-    fn clock_redraw_matches_full_draw() {
+    fn partial_redraw_matches_full_draw() {
+        // The compositor redraws a damaged rectangle by drawing everything clipped to it; the result must
+        // be the same as drawing the whole screen.
         let (w, h) = (1280, 720);
         let l = DeskLayout::new(w, h);
         let mut a = vec![0u32; w * h];
@@ -491,27 +519,31 @@ mod tests {
         {
             let mut c = Canvas::new(&mut a, w, h, w).unwrap();
             draw(&mut c, &l, "Mon 23 Nov  14:05");
-            draw_clock(&mut c, &l, "Mon 23 Nov  14:06");
+            let r = Rect::new(l.window.x - 20, l.window.y - 10, 300, 120);
+            c.set_clip(r);
+            draw_base(&mut c, &l, "Mon 23 Nov  14:05", "");
+            draw_window(&mut c, &l, l.window, CHATBOX, true);
         }
         {
             let mut c = Canvas::new(&mut b, w, h, w).unwrap();
-            draw(&mut c, &l, "Mon 23 Nov  14:06");
+            draw(&mut c, &l, "Mon 23 Nov  14:05");
         }
-        let differ = a.iter().zip(&b).filter(|(x, y)| x != y).count();
-        assert!(differ < 50, "{differ} pixels differ");
+        assert!(a == b, "clipped redraw differs from the full picture");
     }
 
     #[test]
-    fn pointer_zones() {
-        let l = DeskLayout::new(1024, 768);
-        assert_eq!(l.zone(l.term.x, l.term.y), Zone::Terminal { x: 0, y: 0 });
-        assert_eq!(l.zone(l.term.x + 5, l.term.y + 7), Zone::Terminal { x: 5, y: 7 });
-        assert_eq!(l.zone(l.term.right(), l.term.y), Zone::Desktop, "right edge is outside");
-        assert_eq!(l.zone(10, 10), Zone::Desktop, "panel");
-        assert_eq!(l.zone(l.window.x + 30, l.window.y + 5), Zone::Desktop, "title bar");
-        assert!(desktop_owns(&l, 10, 10));
-        assert!(!desktop_owns(&l, l.term.x + 1, l.term.y + 1));
-        assert!(!desktop_owns(&l, -1, 5) && !desktop_owns(&l, 5, 768));
+    fn app_windows_open_inside_the_free_area() {
+        for &(w, h) in &[(1024, 768), (1920, 1080)] {
+            let l = DeskLayout::new(w, h);
+            let a = l.area();
+            for (i, r) in l.app_rects().iter().enumerate() {
+                assert_eq!(r.intersect(&a), *r, "app {i} at {w}x{h}");
+                assert!(app_body(*r, l.title_h).w > 300, "usable body");
+            }
+            assert_eq!(l.term_in(l.window), l.term);
+            let moved = Rect::new(l.window.x + 10, l.window.y + 5, l.window.w, l.window.h);
+            assert_eq!(l.term_in(moved).x, l.term.x + 10);
+        }
     }
 
     #[test]
@@ -585,7 +617,7 @@ mod tests {
     #[test]
     fn dock_messages() {
         let mut b = [0u8; 48];
-        assert_eq!(dock_message(&mut b, 0), "Notes arrives in milestone 6");
+        assert_eq!(dock_message(&mut b, 2), "Browser arrives in milestone 9");
         assert_eq!(dock_message(&mut b, CHATBOX), "ChatBox is open");
         assert_eq!(dock_message(&mut b, 5), "Settings arrives in milestone 10");
         assert_eq!(dock_message(&mut b, 99), "");

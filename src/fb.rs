@@ -72,6 +72,25 @@ pub fn color_for(level: Level) -> u8 {
     }
 }
 
+/// Rows the console has drawn on since [`take_dirty`] was last called (first and last, inclusive; first >
+/// last when nothing changed). The desktop copies only these rows of the ChatBox text to the screen.
+static DIRTY_TOP: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(u32::MAX);
+static DIRTY_BOTTOM: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+fn mark_dirty(y: usize) {
+    use core::sync::atomic::Ordering::Relaxed;
+    DIRTY_TOP.fetch_min(y as u32, Relaxed);
+    DIRTY_BOTTOM.fetch_max(y as u32, Relaxed);
+}
+
+/// The rows changed since the last call (`top..=bottom` in console pixels), and forgets them.
+pub fn take_dirty() -> Option<(usize, usize)> {
+    use core::sync::atomic::Ordering::Relaxed;
+    let top = DIRTY_TOP.swap(u32::MAX, Relaxed);
+    let bottom = DIRTY_BOTTOM.swap(0, Relaxed);
+    (top <= bottom).then_some((top as usize, bottom as usize))
+}
+
 pub struct Console {
     base: *mut u32,
     width: usize,
@@ -228,6 +247,7 @@ impl Console {
             return None;
         }
         let len = len.min(self.width - x);
+        mark_dirty(y);
         // SAFETY: `x + len <= width <= stride` and `y < height`, and `new` checked that the
         // framebuffer holds `stride * height` pixels, so the span is inside it. The console is the
         // only writer and callers never hold two rows at once.

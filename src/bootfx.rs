@@ -13,7 +13,13 @@ use crate::anim::{self, Smoother};
 use crate::arch;
 use crate::bootinfo::FbInfo;
 use crate::bootscene::{Dirty, MenuView, Scene, View};
-use crate::desktop::{self, DeskLayout, Zone};
+use crate::apps::{parse_tasks, Effect, Fonts, Help, Notes, Tasks, NOTES_DIR, TASKS_FILE};
+use crate::desktop::{self, DeskLayout, APPS, CHATBOX, HELP, NOTES, TASKS};
+use crate::keymap::Key;
+use crate::wm::Wm;
+use alloc::format;
+use alloc::string::String;
+use alloc::vec::Vec;
 use crate::pointer::{self, Pointer, Texel};
 use crate::fb::Console;
 use crate::global::Global;
@@ -48,22 +54,12 @@ struct State {
     hint: &'static str,
     key_poll: Option<fn() -> bool>,
     frames: u32,
-    /// Set once the desktop is on screen.
-    desk: Option<DeskLayout>,
-    /// Minute shown by the panel clock (to redraw only when it changes).
-    clock_min: u32,
     /// The mouse pointer on the desktop (screen coordinates), once a mouse has moved.
     dp: Option<Pointer>,
     /// Where the desktop last painted the pointer (None while the console shows it).
     dp_shown: Option<(i32, i32)>,
     /// Buttons of the previous mouse event (to see presses and releases).
     dp_buttons: u8,
-    /// While the window is being dragged: where it was grabbed, relative to its top-left corner.
-    drag: Option<(i32, i32)>,
-    /// When the window was last redrawn during a drag (TSC).
-    drag_drawn: u64,
-    /// When the panel message was shown (TSC), while one is on screen.
-    msg_at: Option<u64>,
 }
 
 static STATE: Global<State> = Global::new(State {
@@ -79,14 +75,9 @@ static STATE: Global<State> = Global::new(State {
     hint: "",
     key_poll: None,
     frames: 0,
-    desk: None,
-    clock_min: u32::MAX,
     dp: None,
     dp_shown: None,
     dp_buttons: 0,
-    drag: None,
-    drag_drawn: 0,
-    msg_at: None,
 });
 
 fn state() -> &'static mut State {
@@ -231,38 +222,100 @@ pub fn finish() {
     }
 }
 
-/// Draws the desktop, fades it in (about 0.3 s) and moves the text console into the Terminal window.
-/// Returns false (nothing changed) when the window is too small for a console.
+// ---- the desktop: compositor and window manager --------------------------------------------------------------
+//
+// After boot the console no longer draws on the screen: it draws into TERMBUF. The screen is composed in BACK
+// from the wallpaper, the panel, the open windows bottom to top (ChatBox's body is copied from TERMBUF, the other
+// apps draw themselves) and the dock; then only the changed rectangle is copied to the framebuffer, and the
+// pointer is painted on top. Everything runs with interrupts off (the shell task calls in for the mouse and
+// keys, the status task for console changes, the clock and auto-save).
+
+/// The console's own pixels while the desktop runs (`term.w` pixels per row).
+static TERMBUF: Global<[u32; MAX_W * MAX_H]> = Global::new([0; MAX_W * MAX_H]);
+
+struct Desk {
+    l: DeskLayout,
+    wm: Wm,
+    notes: Option<Notes>,
+    tasks: Option<Tasks>,
+    help: Help,
+    /// Panel message and when it was shown (TSC).
+    msg: String,
+    msg_at: Option<u64>,
+    /// Minute shown by the panel clock.
+    clock_min: u32,
+    /// While a window is dragged: which, and where it was grabbed relative to its corner.
+    drag: Option<(usize, i32, i32)>,
+    drag_drawn: u64,
+    /// When notes / tasks last changed and are not saved yet (TSC).
+    notes_dirty: Option<u64>,
+    tasks_dirty: Option<u64>,
+}
+
+static DESK: Global<Option<Desk>> = Global::new(None);
+/// Set when a file changed and the shell should save the RAM file system to the USB stick.
+static PERSIST: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+/// Notes and tasks are written to the file system this long after the last key.
+const AUTOSAVE_US: u64 = 1_200_000;
+
+/// Only with interrupts off (see the section comment).
+fn desk() -> Option<&'static mut Desk> {
+    // SAFETY: every caller runs inside `arch::without_interrupts`, on the only CPU, and does not keep the
+    // reference past that section.
+    unsafe { DESK.get() }.as_mut()
+}
+
+/// Draws the desktop, fades it in (about 0.3 s) and gives the text console its off-screen buffer, shown in
+/// the ChatBox window. Returns false (nothing changed) when the window is too small for a console.
 fn enter_desktop() -> bool {
     let s = state();
     let Some(fb) = s.fb else { return false };
     let (w, h) = (fb.width, fb.height);
     let l = DeskLayout::new(w, h);
-    // The console for the window: the same framebuffer, starting at the window's inside.
     let t = l.term;
+    // SAFETY: single-threaded boot path; nothing else uses TERMBUF yet.
+    let term = unsafe { TERMBUF.get() };
     let info = FbInfo {
-        base: fb.base + ((t.y as usize * fb.stride + t.x as usize) * 4) as u64,
-        size: fb.stride * t.h as usize * 4,
+        base: term.as_mut_ptr() as u64,
+        size: t.w as usize * t.h as usize * 4,
         width: t.w as usize,
         height: t.h as usize,
-        stride: fb.stride,
-        format: fb.format,
+        stride: t.w as usize,
+        // 0x00RRGGBB, the same as the canvas, so the compositor copies rows unchanged.
+        format: PixelFormat::Bgr,
     };
-    // SAFETY: the rectangle lies inside the framebuffer (DeskLayout keeps the window on screen), so every
-    // row the console touches, `x .. x + width` of lines `y .. y + height`, is inside the mapped framebuffer.
+    // SAFETY: TERMBUF is a static, mapped and writable, and holds MAX_W * MAX_H >= w * h pixels; only the
+    // console writes it from now on.
     let Some(mut con) = (unsafe { Console::new(&info) }) else {
-        crate::warn!("desktop", "terminal window {}x{} too small for the console", t.w, t.h);
+        crate::warn!("desktop", "ChatBox text area {}x{} too small for the console", t.w, t.h);
         return false;
     };
-    let mut cbuf = [0u8; 28];
-    let clock = clock_now(&mut cbuf);
+    con.clear();
+    con.fullscreen_log();
+    let mut wm = Wm::new(l.app_rects(), l.area());
+    wm.show(CHATBOX);
     // SAFETY: single-threaded boot path (see `state`).
-    let back = unsafe { BACK.get() };
-    {
-        let Some(mut c) = Canvas::new(&mut back[..w * h], w, h, w) else { return false };
-        desktop::draw(&mut c, &l, clock);
+    unsafe {
+        *DESK.get() = Some(Desk {
+            l,
+            wm,
+            notes: None,
+            tasks: None,
+            help: Help::new(),
+            msg: String::new(),
+            msg_at: None,
+            clock_min: u32::MAX,
+            drag: None,
+            drag_drawn: 0,
+            notes_dirty: None,
+            tasks_dirty: None,
+        });
     }
     let full = Rect::new(0, 0, w as i32, h as i32);
+    let Some(d) = desk() else { return false };
+    compose(d, &fb, full);
+    // SAFETY: single-threaded boot path.
+    let back = unsafe { BACK.get() };
     let t0 = arch::rdtsc();
     loop {
         let e = us_since(t0);
@@ -273,11 +326,7 @@ fn enter_desktop() -> bool {
         blit_dim(&fb, &back[..w * h], w, full, k);
     }
     blit(&fb, &back[..w * h], w, full);
-    con.clear();
-    con.fullscreen_log();
     log::attach_console(con);
-    s.desk = Some(l);
-    s.clock_min = u32::MAX;
     crate::info!("desktop", "desktop shown; ChatBox window, text area {}x{} at ({}, {})", t.w, t.h, t.x, t.y);
     true
 }
@@ -289,145 +338,362 @@ fn clock_now(buf: &mut [u8; 28]) -> &str {
     }
 }
 
-/// Keeps the panel clock current; cheap to call often (redraws only when the minute changes). Called by the
-/// status task, the only caller once the desktop is up.
-pub fn panel_tick() {
-    arch::without_interrupts(panel_tick_inner);
-}
-
-fn panel_tick_inner() {
-    let s = state();
-    let (Some(l), Some(fb)) = (s.desk, s.fb) else { return };
-    if s.msg_at.is_some_and(|t| us_since(t) >= MESSAGE_US) {
-        show_message(&fb, &l, "");
-    }
-    let min = crate::rtc::now().map_or(0, |t| u32::from(t.hour) * 60 + u32::from(t.min));
-    if min == s.clock_min {
-        return;
-    }
-    s.clock_min = min;
+/// Draws the scene clipped to `r` into BACK (no copy to the screen).
+fn compose(d: &mut Desk, fb: &FbInfo, r: Rect) {
+    let (w, h) = (fb.width, fb.height);
+    // SAFETY: BACK and TERMBUF are only used with interrupts off after boot (see the section comment); the
+    // console may be writing TERMBUF from another task, which is harmless (a torn row is redrawn next tick).
+    let back = unsafe { BACK.get() };
+    // SAFETY: TERMBUF is a static of MAX_W * MAX_H pixels; it is only read here (the console writes it through
+    // its own raw pointer).
+    let term = unsafe { core::slice::from_raw_parts(TERMBUF.as_ptr() as *const u32, MAX_W * MAX_H) };
+    let Some(mut c) = Canvas::new(&mut back[..w * h], w, h, w) else { return };
+    c.set_clip(r);
     let mut cbuf = [0u8; 28];
     let clock = clock_now(&mut cbuf);
-    let (w, h) = (fb.width, fb.height);
-    // SAFETY: after boot only the status task calls this; nothing else uses BACK any more.
-    let back = unsafe { BACK.get() };
-    {
-        let Some(mut c) = Canvas::new(&mut back[..w * h], w, h, w) else { return };
-        desktop::draw_clock(&mut c, &l, clock);
-    }
-    blit(&fb, &back[..w * h], w, l.clock);
-    // The clock area was copied over the pointer: paint it again.
-    if let Some((x, y)) = s.dp_shown {
-        if !l.clock.intersect(&Rect::new(x, y, pointer::SPRITE_W as i32, pointer::SPRITE_H as i32)).is_empty() {
-            sprite(&fb, &l, x, y);
-        }
-    }
-}
-
-/// True once the desktop is on screen (the mouse then goes to [`desk_pointer`]).
-pub fn desktop_active() -> bool {
-    state().desk.is_some()
-}
-
-/// Moves the desktop pointer by a mouse movement. Over the terminal text the console draws it (so text
-/// redraws keep it intact); everywhere else the desktop does, restoring what was under it from the back
-/// buffer, which holds the desktop picture.
-pub fn desk_pointer(dx: i32, dy: i32, buttons: u8) {
-    arch::without_interrupts(|| {
-        let s = state();
-        let (Some(l), Some(fb)) = (s.desk, s.fb) else { return };
-        let p = s.dp.get_or_insert_with(|| Pointer::new(fb.width, fb.height));
-        p.apply(dx, dy, buttons);
-        let (x, y) = (p.x, p.y);
-        if let Some((ox, oy)) = s.dp_shown.take() {
-            unsprite(&fb, &l, ox, oy);
-        }
-        // Left button: pressed on the title bar grabs the window; moving drags it; releasing drops it.
-        let (left, was_left) = (buttons & 1 != 0, s.dp_buttons & 1 != 0);
-        s.dp_buttons = buttons;
-        if left && !was_left && l.title_bar().contains(x, y) {
-            s.drag = Some((x - l.window.x, y - l.window.y));
-            s.drag_drawn = 0;
-        } else if left && !was_left {
-            if let Some(app) = l.dock_hit(x, y) {
-                let mut mbuf = [0u8; 48];
-                show_message(&fb, &l, desktop::dock_message(&mut mbuf, app));
-            }
-        }
-        let mut l = l;
-        if let Some((gx, gy)) = s.drag {
-            // Redraw at most every 40 ms while dragging, and always on release, so the drop is exact.
-            if !left || us_since(s.drag_drawn) >= 40_000 {
-                let to = l.moved(x - gx, y - gy);
-                if to != l {
-                    move_window(&fb, to);
-                    l = to;
+    desktop::draw_base(&mut c, &d.l, clock, &d.msg);
+    let focused = d.wm.focused();
+    let f = Fonts::for_screen(d.l.big());
+    let order: Vec<usize> = d.wm.order().to_vec();
+    for app in order {
+        let win = d.wm.rect(app);
+        let on_top = focused == Some(app);
+        desktop::draw_window(&mut c, &d.l, win, app, on_top);
+        let body = desktop::app_body(win, d.l.title_h);
+        let old = c.clip();
+        c.set_clip(old.intersect(&body));
+        if !c.clip().is_empty() {
+            match app {
+                CHATBOX => {
+                    let t = d.l.term_in(win);
+                    c.copy_from(t.x, t.y, t.w, t.h, term, t.w as usize);
                 }
-                s.drag_drawn = arch::rdtsc();
-            }
-            if !left {
-                s.drag = None;
+                NOTES => {
+                    if let Some(n) = d.notes.as_mut() {
+                        n.draw(&mut c, body, &f, on_top);
+                    }
+                }
+                TASKS => {
+                    if let Some(t) = d.tasks.as_ref() {
+                        t.draw(&mut c, body, &f, on_top);
+                    }
+                }
+                HELP => d.help.draw(&mut c, body, &f, on_top),
+                _ => {}
             }
         }
-        match l.zone(x, y) {
-            Zone::Terminal { x: cx, y: cy } => {
-                let _ = log::with_console(|c| c.pointer_place(cx, cy, buttons));
+        c.set_clip(old);
+    }
+    let mut open = [false; APPS.len()];
+    for &a in d.wm.order() {
+        open[a] = true;
+    }
+    desktop::draw_dock(&mut c, &d.l, &open);
+}
+
+/// Redraws rectangle `r` of the screen: composes it, copies it out, puts the pointer back on top.
+fn redraw(d: &mut Desk, fb: &FbInfo, r: Rect) {
+    let r = r.intersect(&Rect::new(0, 0, fb.width as i32, fb.height as i32));
+    if r.is_empty() {
+        return;
+    }
+    compose(d, fb, r);
+    // SAFETY: as in `compose`.
+    let back = unsafe { BACK.get() };
+    blit(fb, &back[..fb.width * fb.height], fb.width, r);
+    if let Some((x, y)) = state().dp_shown {
+        if !r.intersect(&Rect::new(x, y, pointer::SPRITE_W as i32, pointer::SPRITE_H as i32)).is_empty() {
+            sprite(fb, x, y);
+        }
+    }
+}
+
+/// A window and its shadow.
+fn win_area(d: &Desk, app: usize) -> Rect {
+    d.wm.rect(app).inflate(desktop::SHADOW)
+}
+
+/// Keeps the desktop current; called about 30 times a second by the status task: copies what the console
+/// drew, updates the clock, clears an old panel message, and auto-saves notes and tasks.
+pub fn desk_tick() {
+    arch::without_interrupts(|| {
+        let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
+        if let Some((a, b)) = crate::fb::take_dirty() {
+            if d.wm.is_open(CHATBOX) {
+                let t = d.l.term_in(d.wm.rect(CHATBOX));
+                redraw(d, &fb, Rect::new(t.x, t.y + a as i32, t.w, (b - a + 1) as i32));
             }
-            Zone::Desktop => {
-                let _ = log::with_console(|c| c.pointer_hide());
-                sprite(&fb, &l, x, y);
-                s.dp_shown = Some((x, y));
+        }
+        if d.msg_at.is_some_and(|t| us_since(t) >= MESSAGE_US) {
+            d.msg.clear();
+            d.msg_at = None;
+            let r = d.l.message;
+            redraw(d, &fb, r);
+        }
+        let min = crate::rtc::now().map_or(0, |t| u32::from(t.hour) * 60 + u32::from(t.min));
+        if min != d.clock_min {
+            d.clock_min = min;
+            let r = d.l.clock;
+            redraw(d, &fb, r);
+        }
+        if d.notes_dirty.is_some_and(|t| us_since(t) >= AUTOSAVE_US) {
+            d.notes_dirty = None;
+            if let Some(n) = d.notes.as_mut() {
+                save_notes(n);
+            }
+            let body = desktop::app_body(d.wm.rect(NOTES), d.l.title_h);
+            if d.wm.is_open(NOTES) {
+                redraw(d, &fb, body);
+            }
+        }
+        if d.tasks_dirty.is_some_and(|t| us_since(t) >= AUTOSAVE_US) {
+            d.tasks_dirty = None;
+            if let Some(t) = d.tasks.as_ref() {
+                let _ = crate::shell::fs().write(TASKS_FILE, &t.to_text());
+                PERSIST.store(true, core::sync::atomic::Ordering::Relaxed);
             }
         }
     });
 }
 
-/// Moves the ChatBox window to `to`: redraws the desktop with the window there, then moves the console and
-/// lets it repaint its text from its history.
-fn move_window(fb: &FbInfo, to: DeskLayout) {
-    let (w, h) = (fb.width, fb.height);
-    let mut cbuf = [0u8; 28];
-    let clock = clock_now(&mut cbuf);
-    // SAFETY: after boot BACK holds the desktop and is only used under `without_interrupts` (caller).
-    let back = unsafe { BACK.get() };
-    {
-        let Some(mut c) = Canvas::new(&mut back[..w * h], w, h, w) else { return };
-        desktop::draw(&mut c, &to, clock);
+/// Writes every note to `/notes/<title>.txt` and removes files of deleted notes.
+fn save_notes(n: &mut Notes) {
+    let fs = crate::shell::fs();
+    let _ = fs.mkdir(NOTES_DIR);
+    let files = n.files();
+    let stale: Vec<String> = fs.list(NOTES_DIR).filter(|(name, size)| size.is_some() && name.ends_with(".txt") && !files.iter().any(|f| f.0 == *name)).map(|(name, _)| String::from(name)).collect();
+    for name in stale {
+        fs.remove(&format!("{NOTES_DIR}/{name}"));
     }
-    blit(fb, &back[..w * h], w, Rect::new(0, 0, w as i32, h as i32));
-    let t = to.term;
-    let base = fb.base + ((t.y as usize * fb.stride + t.x as usize) * 4) as u64;
-    // SAFETY: `DeskLayout::moved` keeps the window, and so the terminal rectangle, inside the screen.
-    let _ = log::with_console(|c| unsafe { c.relocate(base) });
-    let s = state();
-    s.desk = Some(to);
-    // The full redraw cleared the panel message.
-    s.msg_at = None;
+    let mut ok = true;
+    for (name, data) in files {
+        ok &= fs.write(&format!("{NOTES_DIR}/{name}"), &data).is_ok();
+    }
+    n.unsaved = false;
+    n.save_note = if ok { "Saved" } else { "Not saved: the file system is full" };
+    PERSIST.store(true, core::sync::atomic::Ordering::Relaxed);
 }
 
-/// Shows `msg` in the middle of the panel for a few seconds (`panel_tick` clears it); "" clears it now.
-/// Called with interrupts off (pointer handler, status task).
-fn show_message(fb: &FbInfo, l: &DeskLayout, msg: &str) {
-    let (w, h) = (fb.width, fb.height);
-    // SAFETY: after boot BACK holds the desktop and is only used with interrupts off (caller).
-    let back = unsafe { BACK.get() };
-    {
-        let Some(mut c) = Canvas::new(&mut back[..w * h], w, h, w) else { return };
-        desktop::draw_message(&mut c, l, msg);
+fn load_notes() -> Notes {
+    let fs = crate::shell::fs();
+    let names: Vec<String> = fs.list(NOTES_DIR).filter(|(n, size)| size.is_some() && n.ends_with(".txt")).map(|(n, _)| String::from(n)).collect();
+    let found = names
+        .into_iter()
+        .map(|n| {
+            let data = fs.read(&format!("{NOTES_DIR}/{n}")).map(<[u8]>::to_vec).unwrap_or_default();
+            (String::from(n.trim_end_matches(".txt")), data)
+        })
+        .collect();
+    Notes::new(found)
+}
+
+fn load_tasks() -> Tasks {
+    Tasks::new(parse_tasks(crate::shell::fs().read(TASKS_FILE).unwrap_or(b"")))
+}
+
+/// True once (and then false) when the desktop changed files that should be saved to the USB stick.
+pub fn take_persist() -> bool {
+    PERSIST.swap(false, core::sync::atomic::Ordering::Relaxed)
+}
+
+/// After the shell tried to save to the USB stick: shows in Notes whether the files are only in memory.
+pub fn persist_done(only_in_memory: bool) {
+    arch::without_interrupts(|| {
+        let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
+        let Some(n) = d.notes.as_mut() else { return };
+        let note = if only_in_memory { "Saved in memory (no USB stick to keep it after power-off)" } else { "Saved" };
+        if n.save_note != note && !n.unsaved {
+            n.save_note = note;
+            if d.wm.is_open(NOTES) {
+                let r = desktop::app_body(d.wm.rect(NOTES), d.l.title_h);
+                redraw(d, &fb, r);
+            }
+        }
+    });
+}
+
+/// The `task` command changed the task file: the Tasks window reads it again.
+pub fn tasks_reload() {
+    arch::without_interrupts(|| {
+        let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
+        if d.tasks.is_some() {
+            d.tasks = Some(load_tasks());
+            if d.wm.is_open(TASKS) {
+                let r = desktop::app_body(d.wm.rect(TASKS), d.l.title_h);
+                redraw(d, &fb, r);
+            }
+        }
+    });
+}
+
+/// True once the desktop is on screen (the mouse then goes to [`desk_pointer`]).
+pub fn desktop_active() -> bool {
+    arch::without_interrupts(|| desk().is_some())
+}
+
+fn set_message(d: &mut Desk, fb: &FbInfo, msg: &str) {
+    d.msg = String::from(msg);
+    d.msg_at = Some(arch::rdtsc());
+    let r = d.l.message;
+    redraw(d, fb, r);
+}
+
+/// Opens `app`'s window (loading its data the first time) or brings it to the front.
+fn open_app(d: &mut Desk, fb: &FbInfo, app: usize) {
+    match app {
+        NOTES if d.notes.is_none() => d.notes = Some(load_notes()),
+        TASKS if d.tasks.is_none() => d.tasks = Some(load_tasks()),
+        _ => {}
     }
-    blit(fb, &back[..w * h], w, l.message);
-    let s = state();
-    s.msg_at = if msg.is_empty() { None } else { Some(arch::rdtsc()) };
-    // The area was copied over the pointer: paint it again.
-    if let Some((x, y)) = s.dp_shown {
-        if !l.message.intersect(&Rect::new(x, y, pointer::SPRITE_W as i32, pointer::SPRITE_H as i32)).is_empty() {
-            sprite(fb, l, x, y);
+    let before = d.wm.focused();
+    d.wm.show(app);
+    let r = win_area(d, app);
+    redraw(d, fb, r);
+    if let Some(b) = before.filter(|&b| b != app) {
+        let r = desktop::title_bar(d.wm.rect(b), d.l.title_h);
+        redraw(d, fb, r);
+    }
+    let r = d.l.dock;
+    redraw(d, fb, r);
+}
+
+fn hide_app(d: &mut Desk, fb: &FbInfo, app: usize) {
+    let area = win_area(d, app);
+    d.wm.hide(app);
+    redraw(d, fb, area);
+    if let Some(f) = d.wm.focused() {
+        let r = win_area(d, f);
+        redraw(d, fb, r);
+    }
+    let r = d.l.dock;
+    redraw(d, fb, r);
+}
+
+/// Moves the desktop pointer by a mouse movement and handles clicks: the dock opens apps, a click raises a
+/// window, the title bar drags it, its buttons close or minimise it, and clicks inside Notes and Tasks go
+/// to them.
+pub fn desk_pointer(dx: i32, dy: i32, buttons: u8) {
+    arch::without_interrupts(|| {
+        let s = state();
+        let (Some(d), Some(fb)) = (desk(), s.fb) else { return };
+        let p = s.dp.get_or_insert_with(|| Pointer::new(fb.width, fb.height));
+        p.apply(dx, dy, buttons);
+        let (x, y) = (p.x, p.y);
+        if let Some((ox, oy)) = s.dp_shown.take() {
+            unsprite(&fb, ox, oy);
+        }
+        let (left, was_left) = (buttons & 1 != 0, s.dp_buttons & 1 != 0);
+        s.dp_buttons = buttons;
+        if left && !was_left {
+            press(d, &fb, x, y);
+        }
+        if let Some((app, gx, gy)) = d.drag {
+            // Redraw at most every 40 ms while dragging, and always on release, so the drop is exact.
+            if !left || us_since(d.drag_drawn) >= 40_000 {
+                let before = win_area(d, app);
+                d.wm.move_to(app, x - gx, y - gy);
+                let after = win_area(d, app);
+                if before != after {
+                    redraw(d, &fb, before.union(&after));
+                }
+                d.drag_drawn = arch::rdtsc();
+            }
+            if !left {
+                d.drag = None;
+            }
+        }
+        sprite(&fb, x, y);
+        state().dp_shown = Some((x, y));
+    });
+}
+
+fn press(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
+    if let Some(app) = d.l.dock_hit(x, y) {
+        if APPS[app].1.is_none() {
+            open_app(d, fb, app);
+        } else {
+            let mut mbuf = [0u8; 48];
+            set_message(d, fb, desktop::dock_message(&mut mbuf, app));
+        }
+        return;
+    }
+    let Some(app) = d.wm.hit(x, y) else { return };
+    let win = d.wm.rect(app);
+    let th = d.l.title_h;
+    if d.wm.focused() != Some(app) {
+        open_app(d, fb, app);
+    }
+    let [min, max, close] = desktop::title_buttons(win, th);
+    if min.contains(x, y) || close.contains(x, y) {
+        hide_app(d, fb, app);
+    } else if max.contains(x, y) {
+        set_message(d, fb, "Resizing windows comes in a later version");
+    } else if desktop::title_bar(win, th).contains(x, y) {
+        d.drag = Some((app, x - win.x, y - win.y));
+        d.drag_drawn = 0;
+    } else {
+        let body = desktop::app_body(win, th);
+        let f = Fonts::for_screen(d.l.big());
+        let e = match app {
+            NOTES => d.notes.as_mut().map_or(Effect::None, |n| n.click(body, &f, x, y)),
+            TASKS => d.tasks.as_mut().map_or(Effect::None, |t| t.click(body, &f, x, y)),
+            _ => Effect::None,
+        };
+        after_effect(d, fb, app, e);
+    }
+}
+
+fn after_effect(d: &mut Desk, fb: &FbInfo, app: usize, e: Effect) {
+    if e == Effect::None {
+        return;
+    }
+    if e == Effect::Changed {
+        let now = Some(arch::rdtsc());
+        match app {
+            NOTES => d.notes_dirty = now,
+            TASKS => d.tasks_dirty = now,
+            _ => {}
         }
     }
+    let r = desktop::app_body(d.wm.rect(app), d.l.title_h);
+    redraw(d, fb, r);
 }
 
-/// Paints the arrow at (`x`, `y`) on the framebuffer, except over the terminal text (the console's).
-fn sprite(fb: &FbInfo, l: &DeskLayout, x: i32, y: i32) {
+/// A key while the desktop runs. Ctrl+T switches between open windows (like Alt+Tab). Keys for Notes,
+/// Tasks or Help go to that window when it is in front; returns false when the key is for the shell (ChatBox
+/// in front).
+pub fn desk_key(k: Key) -> bool {
+    arch::without_interrupts(|| {
+        let (Some(d), Some(fb)) = (desk(), state().fb) else { return false };
+        if k == Key::Ctrl(b't') {
+            if let Some(top) = d.wm.focused() {
+                d.wm.cycle();
+                let r = win_area(d, top);
+                redraw(d, &fb, r);
+                if let Some(f) = d.wm.focused() {
+                    let r = win_area(d, f);
+                    redraw(d, &fb, r);
+                }
+            }
+            return true;
+        }
+        let Some(app) = d.wm.focused() else {
+            // No window open: the keys would go to a hidden shell, so they are dropped.
+            return true;
+        };
+        let e = match app {
+            NOTES => d.notes.as_mut().map_or(Effect::None, |n| n.key(k)),
+            TASKS => d.tasks.as_mut().map_or(Effect::None, |t| t.key(k)),
+            HELP => d.help.key(k),
+            _ => return false,
+        };
+        after_effect(d, &fb, app, e);
+        true
+    })
+}
+
+/// Paints the arrow at (`x`, `y`) on the framebuffer.
+fn sprite(fb: &FbInfo, x: i32, y: i32) {
     for sy in 0..pointer::SPRITE_H {
         for sx in 0..pointer::SPRITE_W {
             let c = match pointer::sprite_texel(sx, sy) {
@@ -436,7 +702,7 @@ fn sprite(fb: &FbInfo, l: &DeskLayout, x: i32, y: i32) {
                 Texel::Fill => 0xFFFFFF,
             };
             let (px, py) = (x + sx as i32, y + sy as i32);
-            if desktop::desktop_owns(l, px, py) {
+            if px >= 0 && py >= 0 {
                 put_px(fb, px as usize, py as usize, c);
             }
         }
@@ -444,8 +710,8 @@ fn sprite(fb: &FbInfo, l: &DeskLayout, x: i32, y: i32) {
 }
 
 /// Puts back the desktop pixels under an arrow painted by [`sprite`].
-fn unsprite(fb: &FbInfo, l: &DeskLayout, x: i32, y: i32) {
-    // SAFETY: after boot, BACK holds the desktop and is only used under `without_interrupts` here.
+fn unsprite(fb: &FbInfo, x: i32, y: i32) {
+    // SAFETY: after boot, BACK holds the composed screen and is only used with interrupts off.
     let back = unsafe { BACK.get() };
     for sy in 0..pointer::SPRITE_H {
         for sx in 0..pointer::SPRITE_W {
@@ -453,7 +719,7 @@ fn unsprite(fb: &FbInfo, l: &DeskLayout, x: i32, y: i32) {
                 continue;
             }
             let (px, py) = (x + sx as i32, y + sy as i32);
-            if desktop::desktop_owns(l, px, py) {
+            if px >= 0 && py >= 0 && (px as usize) < fb.width && (py as usize) < fb.height {
                 put_px(fb, px as usize, py as usize, back[py as usize * fb.width + px as usize]);
             }
         }
