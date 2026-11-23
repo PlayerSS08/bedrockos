@@ -4148,11 +4148,11 @@ pub extern "C" fn shell_task(_: usize) {
             // terminal text.
             let on_desk = crate::bootfx::desktop_active();
             if on_desk {
-                crate::bootfx::desk_pointer(m.dx, m.dy, m.buttons);
+                crate::bootfx::desk_pointer(&m);
             }
             log::with_console(|c| {
                 if !on_desk {
-                    c.pointer_motion(m.dx, m.dy, m.buttons);
+                    c.pointer_motion(&m);
                 }
                 let lines = (m.wheel.unsigned_abs() as usize).saturating_mul(3);
                 if m.wheel > 0 {

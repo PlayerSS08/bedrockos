@@ -130,7 +130,7 @@ impl Touchpad {
             }
         }
         let clamp = |f: &Field| f.value(data).map(|v| v.clamp(-1000, 1000));
-        Some(MouseMotion { dx: clamp(&m.x)?, dy: clamp(&m.y)?, wheel: m.wheel.as_ref().and_then(clamp).unwrap_or(0), buttons })
+        Some(MouseMotion { dx: clamp(&m.x)?, dy: clamp(&m.y)?, wheel: m.wheel.as_ref().and_then(clamp).unwrap_or(0), buttons, abs: None })
     }
 
     fn touch_report(&mut self, t: &TouchLayout, data: &[u8], now_ms: u64) -> Option<MouseMotion> {
@@ -267,7 +267,7 @@ mod tests {
     fn mouse_reports_pass_straight_through() {
         let mut t = Touchpad::new(MOUSE).unwrap();
         let m = t.feed(&[1, 0x01, 5, 0xFB, 0], 0).unwrap();
-        assert_eq!(m, MouseMotion { dx: 5, dy: -5, wheel: 0, buttons: 1 });
+        assert_eq!(m, MouseMotion { dx: 5, dy: -5, wheel: 0, buttons: 1, abs: None });
         // Another report id is somebody else's.
         assert_eq!(t.feed(&[9, 0, 0, 0, 0], 0), None);
         assert_eq!(t.feed(&[], 0), None);

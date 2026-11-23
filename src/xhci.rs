@@ -36,6 +36,10 @@ use crate::{arch, log, paging, pci};
 /// Transfer completion code: the device stalled the request.
 const CC_STALL: u8 = 6;
 
+/// VirtualBox's USB tablet: an absolute pointing device without a boot protocol.
+const VBOX_VENDOR: u16 = 0x80EE;
+const VBOX_TABLET: u16 = 0x0021;
+
 /// TRBs per ring: one 4 KiB frame holds 256 of 16 bytes.
 const RING_TRBS: usize = 256;
 /// Most device slots this driver asks the controller for.
@@ -146,6 +150,10 @@ struct Mouse {
     motion: MouseMotion,
     dirty: bool,
     errors: u8,
+    /// VirtualBox's USB tablet (absolute positions) rather than a boot mouse.
+    tablet: bool,
+    /// Bytes asked for per report.
+    report_len: u32,
 }
 
 /// A device that has a slot and an address.
@@ -528,9 +536,10 @@ impl Xhci {
         dev: &mut Device,
         slot: u8,
         speed: u8,
-        out_ctx: u64,
-        in_ctx: u64,
+        (out_ctx, in_ctx): (u64, u64),
         hid: &usbdesc::BootKeyboard,
+        // (switch to the boot protocol, bytes per report)
+        (boot, report_len): (bool, u32),
     ) -> Result<(u8, ProducerRing<'static>, u64), &'static str> {
         let ac64 = self.caps.ac64;
         let csz = self.caps.context_size();
@@ -538,7 +547,7 @@ impl Xhci {
         self.control(dev, [0x00, 9, hid.config, 0, 0, 0, 0, 0], None)?;
         // SET_PROTOCOL(boot). Some devices refuse it (VirtualBox's USB mouse stalls); they send boot-format
         // reports anyway, so carry on.
-        if self.control(dev, [0x21, 0x0B, 0, 0, hid.interface, 0, 0, 0], None).is_err() {
+        if boot && self.control(dev, [0x21, 0x0B, 0, 0, hid.interface, 0, 0, 0], None).is_err() {
             info!("xhci", "slot {}: SET_PROTOCOL refused; using the device's reports as they come", slot);
         }
         let _ = self.control(dev, [0x21, 0x0A, 0, 0, hid.interface, 0, 0, 0], None); // stalls on some devices: fine
@@ -563,7 +572,7 @@ impl Xhci {
         self.command(Trb::configure_endpoint(in_ctx, slot))?;
 
         let report = dma_page(ac64)?;
-        ring.enqueue(Trb::normal(report, 8)).ok_or("interrupt ring full")?;
+        ring.enqueue(Trb::normal(report, report_len)).ok_or("interrupt ring full")?;
         wr32(self.db + 4 * u64::from(slot), u32::from(dci));
         Ok((dci, ring, report))
     }
@@ -605,6 +614,15 @@ impl Xhci {
             xhcictx::set_max_packet(ctx, csz, xhcictx::DCI_EP0, real);
             self.command(Trb::evaluate_context(in_ctx, slot))?;
         }
+        // The whole device descriptor, for the vendor and product IDs.
+        let ids = match self.control(&mut dev, [0x80, 6, 0, 1, 0, 0, 18, 0], Some((18, true))) {
+            Ok(_) => {
+                // SAFETY: `buf` is a page from `dma_page`; the transfer has finished.
+                let b = unsafe { page_bytes(buf) };
+                (u16::from_le_bytes([b[8], b[9]]), u16::from_le_bytes([b[10], b[11]]))
+            }
+            Err(_) => (0, 0),
+        };
 
         // Configuration descriptor: its header tells the full length.
         self.control(&mut dev, [0x80, 6, 0, 2, 0, 0, 9, 0], Some((9, true)))?;
@@ -622,7 +640,7 @@ impl Xhci {
                 return Ok(());
             }
 
-            let (dci, ring, report) = self.start_boot_hid(&mut dev, slot, speed, out_ctx, in_ctx, &kb)?;
+            let (dci, ring, report) = self.start_boot_hid(&mut dev, slot, speed, (out_ctx, in_ctx), &kb, (true, 8))?;
             self.keyboard = Some(Keyboard { port, slot, dci, ring, report, hid: HidKeyboard::new(), queue: KeyQueue::new(), errors: 0 });
             info!("xhci", "port {}: USB keyboard ready (slot {}, speed {})", port, slot, reg::speed_name(speed));
             Ok(())
@@ -631,9 +649,19 @@ impl Xhci {
                 info!("xhci", "port {}: a second mouse is ignored", port);
                 return Ok(());
             }
-            let (dci, ring, report) = self.start_boot_hid(&mut dev, slot, speed, out_ctx, in_ctx, &mo)?;
-            self.mouse = Some(Mouse { port, slot, dci, ring, report, motion: MouseMotion::default(), dirty: false, errors: 0 });
+            let (dci, ring, report) = self.start_boot_hid(&mut dev, slot, speed, (out_ctx, in_ctx), &mo, (true, 8))?;
+            self.mouse = Some(Mouse { port, slot, dci, ring, report, motion: MouseMotion::default(), dirty: false, errors: 0, tablet: false, report_len: 8 });
             info!("xhci", "port {}: USB mouse ready (slot {}, speed {})", port, slot, reg::speed_name(speed));
+            Ok(())
+        } else if let (Some(t), (VBOX_VENDOR, VBOX_TABLET)) = (usbdesc::find_hid(desc_slice), ids) {
+            if self.mouse.is_some() {
+                info!("xhci", "port {}: a second pointing device is ignored", port);
+                return Ok(());
+            }
+            let len = u32::from(t.max_packet.clamp(8, 64));
+            let (dci, ring, report) = self.start_boot_hid(&mut dev, slot, speed, (out_ctx, in_ctx), &t, (false, len))?;
+            self.mouse = Some(Mouse { port, slot, dci, ring, report, motion: MouseMotion::default(), dirty: false, errors: 0, tablet: true, report_len: len });
+            info!("xhci", "port {}: VirtualBox USB tablet ready (slot {}, speed {}): the pointer follows the host mouse", port, slot, reg::speed_name(speed));
             Ok(())
         } else if let Some(ms) = usbdesc::find_mass_storage(desc_slice) {
             if self.storage.is_some() {
@@ -1176,7 +1204,12 @@ impl Xhci {
             CC_SUCCESS | CC_SHORT_PACKET => {
                 // SAFETY: `report` is a page from `dma_page`; the transfer that wrote it has completed.
                 let report = unsafe { read_volatile(m.report as *const [u8; 8]) };
-                if let Some(r) = pointer::parse_report(&report) {
+                if m.tablet {
+                    if let Some((r, pos)) = pointer::parse_tablet_report(&report) {
+                        m.motion.add_abs(r, pos);
+                        m.dirty = true;
+                    }
+                } else if let Some(r) = pointer::parse_report(&report) {
                     m.motion.add(r);
                     m.dirty = true;
                 }
@@ -1189,7 +1222,7 @@ impl Xhci {
         if m.errors >= 8 {
             return;
         }
-        if m.ring.enqueue(Trb::normal(m.report, 8)).is_some() {
+        if m.ring.enqueue(Trb::normal(m.report, m.report_len)).is_some() {
             wr32(db + 4 * u64::from(m.slot), u32::from(m.dci));
         } else {
             warn!("xhci", "mouse transfer ring full");

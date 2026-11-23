@@ -55,6 +55,15 @@ pub fn find_boot_mouse(config_desc: &[u8]) -> Option<BootKeyboard> {
     find_boot_hid(config_desc, PROTOCOL_MOUSE)
 }
 
+/// The first HID interface of any kind (boot or not) with an interrupt IN endpoint: used for VirtualBox's
+/// USB tablet, which has no boot protocol.
+pub fn find_hid(config_desc: &[u8]) -> Option<BootKeyboard> {
+    find_boot_hid(config_desc, ANY_HID)
+}
+
+/// `find_boot_hid` with this protocol accepts any HID interface.
+const ANY_HID: u8 = 0xFF;
+
 fn find_boot_hid(config_desc: &[u8], protocol: u8) -> Option<BootKeyboard> {
     let d = config_desc;
     let mut i = 0usize;
@@ -71,7 +80,7 @@ fn find_boot_hid(config_desc: &[u8], protocol: u8) -> Option<BootKeyboard> {
         match kind {
             DESC_CONFIG if len >= 9 => config = e[5],
             DESC_INTERFACE if len >= 9 => {
-                let boot_keyboard = e[3] == 0 && e[5] == CLASS_HID && e[6] == SUBCLASS_BOOT && e[7] == protocol;
+                let boot_keyboard = e[3] == 0 && e[5] == CLASS_HID && (protocol == ANY_HID || (e[6] == SUBCLASS_BOOT && e[7] == protocol));
                 keyboard_interface = boot_keyboard.then_some(e[2]);
             }
             DESC_ENDPOINT if len >= 7 => {

@@ -39,14 +39,14 @@ if ! exists; then
   "$VBM" createvm --name "$VM" --ostype Other_64 --register --basefolder "$OUT/vm"
   "$VBM" modifyvm "$VM" --firmware efi64 --memory 1024 --cpus 2 --ioapic on --rtcuseutc on \
     --graphicscontroller vmsvga --vram 128 --audio-driver none \
-    --usbxhci on --mouse usb --keyboard ps2 \
+    --usbxhci on --mouse usbtablet --keyboard ps2 \
     --uart1 0x3F8 4 --uart-mode1 file "$SERIAL" \
     --boot1 disk --boot2 none --boot3 none --boot4 none
   "$VBM" storagectl "$VM" --name SATA --add sata --controller IntelAhci --portcount 2
 fi
-# Relative USB mouse (BedrockOS drives boot-protocol mice; it has no tablet driver yet). Also updates
-# VMs made by older scripts. In the VirtualBox window, click to capture the mouse; Right Ctrl releases it.
-"$VBM" modifyvm "$VM" --mouse usb
+# USB tablet: absolute positions, so the host pointer moves in and out of the VM window freely (mouse
+# integration); BedrockOS reads its reports. Also updates VMs made by older scripts.
+"$VBM" modifyvm "$VM" --mouse usbtablet
 case "$NET" in
   nat) "$VBM" modifyvm "$VM" --nic1 nat --nictype1 82540EM --cableconnected1 on ;;
   bridged) [ -n "$BRIDGE" ] || { echo "--net bridged needs --bridge <adapter> (VBoxManage list bridgedifs)" >&2; exit 2; }

@@ -776,12 +776,13 @@ fn hide_app(d: &mut Desk, fb: &FbInfo, app: usize) {
 /// Moves the desktop pointer by a mouse movement and handles clicks: the dock opens apps, a click raises a
 /// window, the title bar drags it, its buttons close or minimise it, and clicks inside Notes and Tasks go
 /// to them.
-pub fn desk_pointer(dx: i32, dy: i32, buttons: u8) {
+pub fn desk_pointer(m: &crate::pointer::MouseMotion) {
+    let buttons = m.buttons;
     arch::without_interrupts(|| {
         let s = state();
         let (Some(d), Some(fb)) = (desk(), s.fb) else { return };
         let p = s.dp.get_or_insert_with(|| Pointer::new(fb.width, fb.height));
-        p.apply(dx, dy, buttons);
+        p.motion(m);
         let (x, y) = (p.x, p.y);
         if let Some((ox, oy)) = s.dp_shown.take() {
             unsprite(&fb, ox, oy);

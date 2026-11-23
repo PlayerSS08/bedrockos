@@ -985,14 +985,15 @@ impl Console {
         self.pointer_shown_at = Some((p.x, p.y));
     }
 
-    /// Moves the pointer by a relative mouse movement (creating it, centred, on first use) and repaints it.
-    pub fn pointer_motion(&mut self, dx: i32, dy: i32, buttons: u8) {
+    /// Moves the pointer by a mouse movement or to a tablet position (creating it, centred, on first use) and
+    /// repaints it.
+    pub fn pointer_motion(&mut self, m: &crate::pointer::MouseMotion) {
         if self.pointer.is_none() {
             self.pointer = Some(Pointer::new(self.width, self.height));
         }
         self.pointer_erase();
         if let Some(p) = self.pointer.as_mut() {
-            p.apply(dx, dy, buttons);
+            p.motion(m);
         }
         self.pointer_paint();
     }
