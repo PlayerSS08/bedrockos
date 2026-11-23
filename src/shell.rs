@@ -910,11 +910,11 @@ fn cmd_connect(rest: &str) {
             cmd_ethernet("connect");
         }
         Some("wifi") | Some("wlan") => {
-            let Some(ssid) = parts.next() else {
-                out!("Usage: connect wifi <ssid> [password]\n");
+            let args = rest.trim_start().split_once(char::is_whitespace).map_or("", |(_, a)| a);
+            let Some((ssid, pass)) = crate::wifihost::split_name_password(args) else {
+                out!("Usage: wifi connect <name> <password>   (a name with spaces goes in quotes: \"My WiFi\" pass)\n");
                 return;
             };
-            let pass = parts.next().unwrap_or("");
             out!("asking the host to join '{}'...\n", ssid);
             match crate::wifihost::link::connect(ssid, pass.as_bytes()) {
                 Ok(_) => {
@@ -955,7 +955,7 @@ fn wifi_scan_host() {
             for net in &nets[..n] {
                 out!("  {:>5}%  {:<8}  {}{}\n", net.signal, if net.secure { "locked" } else { "open" }, net.ssid(), if net.current { "   <- connected now" } else { "" });
             }
-            out!("join one with: wifi connect <name> <password>\n");
+            out!("join one with: wifi connect <name> <password>  (quotes around a name with spaces; or type `wifi` to pick by number)\n");
         }
         Err(e) => {
             out!("cannot scan: {}\n", e.as_str());
@@ -1041,8 +1041,8 @@ fn wifi_choose() {
     let mut password = String::new();
     if pick.secure && !pick.current {
         password = loop {
-            let Some(p) = ask_line(&alloc::format!("Password for {ssid}: "), true, 63) else { return };
-            if p.len() >= 8 {
+            let Some(p) = ask_line(&alloc::format!("Password for {ssid} (Enter alone if the laptop already knows it): "), true, 63) else { return };
+            if p.is_empty() || p.len() >= 8 {
                 break p;
             }
             out!("a Wi-Fi password has at least 8 characters\n");

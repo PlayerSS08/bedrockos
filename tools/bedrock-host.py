@@ -41,22 +41,63 @@ UA = "Mozilla/5.0 (compatible; CraftingTable/1.0; BedrockOS)"
 
 def netsh(*args):
     r = subprocess.run(["netsh", "wlan", *args], capture_output=True)
-    return r.stdout.decode("utf-8", "replace") if r.returncode == 0 else r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+    out = r.stdout.decode("utf-8", "replace") + r.stderr.decode("utf-8", "replace")
+    return out
+
+
+def netsh_ok(*args):
+    return subprocess.run(["netsh", "wlan", *args], capture_output=True).returncode == 0
 
 
 def current_ssid():
-    m = re.search(r"^\s+SSID\s+:\s(.*)$", netsh("show", "interfaces"), re.M)
+    """The network the laptop is connected to now ("" when none)."""
+    text = netsh("show", "interfaces")
+    if not re.search(r"^\s+State\s+:\s+connected", text, re.M):
+        return ""
+    m = re.search(r"^\s+SSID\s+:\s(.*)$", text, re.M)
     return m.group(1).strip() if m else ""
 
 
-def scan():
-    cur = current_ssid()
-    nets, ssid, auth, sig = [], None, "", 0
+def fresh_scan():
+    """Asks Windows to scan the air again (WlanScan), so the list is up to date. Best effort."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class GUID(ctypes.Structure):
+            _fields_ = [("d1", wintypes.DWORD), ("d2", wintypes.WORD), ("d3", wintypes.WORD), ("d4", ctypes.c_ubyte * 8)]
+
+        class INFO(ctypes.Structure):
+            _fields_ = [("guid", GUID), ("desc", ctypes.c_wchar * 256), ("state", wintypes.DWORD)]
+
+        class LIST(ctypes.Structure):
+            _fields_ = [("n", wintypes.DWORD), ("i", wintypes.DWORD), ("items", INFO * 8)]
+
+        w = ctypes.windll.wlanapi
+        h, ver = wintypes.HANDLE(), wintypes.DWORD()
+        if w.WlanOpenHandle(2, None, ctypes.byref(ver), ctypes.byref(h)) != 0:
+            return
+        lst = ctypes.POINTER(LIST)()
+        if w.WlanEnumInterfaces(h, None, ctypes.byref(lst)) == 0:
+            for k in range(min(lst.contents.n, 8)):
+                w.WlanScan(h, ctypes.byref(lst.contents.items[k].guid), None, None, None)
+            w.WlanFreeMemory(lst)
+        w.WlanCloseHandle(h, None)
+        time.sleep(4)  # Windows needs a few seconds to collect the answers
+    except Exception:  # noqa: BLE001 - the cached list is still fine
+        pass
+
+
+def networks():
+    """[(ssid, authentication, signal)] the laptop sees, strongest first, one entry per name."""
+    nets, ssid, auth, sig = {}, None, "", 0
+    def keep():
+        if ssid and (ssid not in nets or nets[ssid][1] < sig):
+            nets[ssid] = (auth, sig)
     for line in netsh("show", "networks", "mode=bssid").splitlines():
         m = re.match(r"^SSID \d+ : (.*)$", line)
         if m:
-            if ssid:
-                nets.append((ssid, auth, sig))
+            keep()
             ssid, auth, sig = m.group(1).strip(), "", 0
             continue
         m = re.match(r"^\s+Authentication\s+:\s(.*)$", line)
@@ -65,45 +106,117 @@ def scan():
         m = re.match(r"^\s+Signal\s+:\s(\d+)%", line)
         if m:
             sig = max(sig, int(m.group(1)))
-    if ssid:
-        nets.append((ssid, auth, sig))
+    keep()
+    return sorted(((s, a, g) for s, (a, g) in nets.items()), key=lambda n: -n[2])
+
+
+def scan():
+    fresh_scan()
+    cur = current_ssid()
     out = []
-    for s, a, g in sorted(nets, key=lambda n: -n[2]):
+    for s, a, g in networks():
         if s and len(s.encode()) <= 32 and "\t" not in s:
             out.append(f"NET\t{g}\t{0 if a == 'Open' else 1}\t{1 if s == cur else 0}\t{s}")
     return out + ["END"]
 
 
-def connect(ssid, password):
-    if ssid == current_ssid():
-        return f"OK the laptop is already on {ssid}"
-    profiles = netsh("show", "profiles")
-    if not re.search(r":\s" + re.escape(ssid) + r"\s*$", profiles, re.M):
-        if not password:
-            return "ERR this network needs a password: wifi connect <name> <password>"
-        x = lambda s: html.escape(s, quote=True)
-        xml = f"""<?xml version="1.0"?>
+def profile_xml(ssid, auth, enc, password):
+    x = lambda v: html.escape(v, quote=True)
+    key = "" if auth == "open" else (
+        f"<sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{x(password)}</keyMaterial></sharedKey>")
+    return f"""<?xml version="1.0"?>
 <WLANProfile xmlns="http://www.microsoft.com/networking/WLAN/profile/v1"><name>{x(ssid)}</name>
 <SSIDConfig><SSID><hex>{ssid.encode().hex().upper()}</hex><name>{x(ssid)}</name></SSID></SSIDConfig>
 <connectionType>ESS</connectionType><connectionMode>manual</connectionMode><MSM><security><authEncryption>
-<authentication>WPA2PSK</authentication><encryption>AES</encryption><useOneX>false</useOneX></authEncryption>
-<sharedKey><keyType>passPhrase</keyType><protected>false</protected><keyMaterial>{x(password)}</keyMaterial>
-</sharedKey></security></MSM></WLANProfile>"""
-        import os
-        import tempfile
-        fd, path = tempfile.mkstemp(suffix=".xml")
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(xml)
-        try:
-            netsh("add", "profile", f"filename={path}")
-        finally:
-            os.remove(path)
-    r = netsh("connect", f"name={ssid}")
-    for _ in range(30):
+<authentication>{auth}</authentication><encryption>{enc}</encryption><useOneX>false</useOneX></authEncryption>
+{key}</security></MSM></WLANProfile>"""
+
+
+def add_profile(xml):
+    import os
+    import tempfile
+    fd, path = tempfile.mkstemp(suffix=".xml")
+    with os.fdopen(fd, "w", encoding="utf-8") as f:
+        f.write(xml)
+    try:
+        return netsh_ok("add", "profile", f"filename={path}", "user=current")
+    finally:
+        os.remove(path)  # it held the password in plain text
+
+
+def export_profile(ssid):
+    """The laptop's saved profile for `ssid` (XML with the key), to put back if a new password fails."""
+    import glob
+    import os
+    import tempfile
+    d = tempfile.mkdtemp()
+    try:
+        netsh("export", "profile", f"name={ssid}", "key=clear", f"folder={d}")
+        files = glob.glob(os.path.join(d, "*.xml"))
+        return open(files[0], encoding="utf-8").read() if files else None
+    finally:
+        for f in glob.glob(os.path.join(d, "*")):
+            os.remove(f)
+        os.rmdir(d)
+
+
+def wait_for(ssid, seconds):
+    for _ in range(seconds * 2):
         time.sleep(0.5)
         if current_ssid() == ssid:
+            return True
+    return False
+
+
+# Windows profile settings for each kind of network, tried in order.
+SECURITY = {
+    "Open": [("open", "none")],
+    "WPA3-Personal": [("WPA3SAE", "AES"), ("WPA2PSK", "AES")],
+    "WPA2-Personal": [("WPA2PSK", "AES")],
+    "WPA-Personal": [("WPAPSK", "AES"), ("WPAPSK", "TKIP")],
+}
+
+
+def connect(ssid, password):
+    """Makes the LAPTOP join `ssid`. Works for networks the laptop has never joined (a profile is made from the
+    password); if joining fails, the laptop goes back to the network it was on."""
+    before = current_ssid()
+    if ssid == before and not password:
+        return f"OK the laptop is already on {ssid}"
+    seen = {s: a for s, a, _ in networks()}
+    if ssid not in seen:
+        fresh_scan()
+        seen = {s: a for s, a, _ in networks()}
+    if password and len(password) < 8:
+        return "ERR a Wi-Fi password has at least 8 characters"
+    known = netsh_ok("show", "profiles", f"name={ssid}")
+    if ssid not in seen and not password and not known:
+        return f"ERR the laptop cannot see {ssid} now: check the name (capitals count) and run wifi scan"
+    # A network that drops out of the list for a moment (weak signal) is still tried, as WPA2/WPA3.
+    auth = seen.get(ssid, "WPA3-Personal" if password else "Open")
+    if "Enterprise" in auth:
+        return f"ERR {ssid} uses a username login ({auth}), which only Windows' own Wi-Fi menu can do"
+    if not password and not known and auth != "Open":
+        return f"ERR {ssid} needs its password: wifi connect {ssid} <password>"
+    backup = export_profile(ssid) if known and password else None
+    tries = SECURITY.get(auth, [("WPA2PSK", "AES")]) if (password or not known) else [None]
+    for t in tries:
+        if t is not None:
+            netsh("delete", "profile", f"name={ssid}")
+            if not add_profile(profile_xml(ssid, t[0], t[1], password)):
+                continue
+        # netsh fails at once when Windows cannot even try (network out of range); no point waiting then.
+        if netsh_ok("connect", f"name={ssid}", f"ssid={ssid}") and wait_for(ssid, 15):
             return f"OK the laptop joined {ssid}"
-    return "ERR the laptop could not join " + ssid + ": " + " ".join(r.split())[:60]
+    # Failed: undo the profile change and go back to where the laptop was.
+    netsh("delete", "profile", f"name={ssid}")
+    if backup:
+        add_profile(backup)
+    if before and before != ssid:
+        netsh("connect", f"name={before}")
+        wait_for(before, 10)
+    back = f"; back on {before}" if before and current_ssid() == before else ""
+    return f"ERR could not join {ssid}: wrong password or weak signal{back}"
 
 
 def wifi_loop():

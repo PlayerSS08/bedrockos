@@ -1,4 +1,4 @@
-﻿//! Host-assisted Wi-Fi ("Wi-Fi through the host").
+//! Host-assisted Wi-Fi ("Wi-Fi through the host").
 //!
 //! When BedrockOS runs in a virtual machine it has no Wi-Fi radio of its own: like every VM it reaches the network
 //! through the host. This module lets BedrockOS still choose *which* Wi-Fi network the host joins. A small helper on
@@ -62,6 +62,25 @@ pub fn parse_net(line: &[u8]) -> Option<Net> {
     n.ssid[..ssid.len()].copy_from_slice(ssid);
     n.len = ssid.len() as u8;
     Some(n)
+}
+
+/// Splits `wifi connect` arguments into the network name and the password. A name with spaces goes in
+/// double quotes (`"My Home WiFi" secret pass`); the password is the rest of the line, spaces included.
+pub fn split_name_password(args: &str) -> Option<(&str, &str)> {
+    let a = args.trim();
+    let (name, rest) = if let Some(q) = a.strip_prefix('"') {
+        let end = q.find('"')?;
+        (&q[..end], &q[end + 1..])
+    } else {
+        match a.find(char::is_whitespace) {
+            Some(i) => (&a[..i], &a[i..]),
+            None => (a, ""),
+        }
+    };
+    if name.is_empty() {
+        return None;
+    }
+    Some((name, rest.trim()))
 }
 
 /// A short text without allocation (helper replies, error messages).
@@ -297,13 +316,13 @@ pub mod link {
 
     fn connect_inner(ssid: &str, password: &[u8]) -> Result<Msg, Msg> {
         if !hello_inner() {
-            return Err(Msg::new(b"no Wi-Fi driver yet (milestone 8); online via the laptop connection: try ip, ping, curl"));
+            return Err(Msg::new(b"no helper: run `python tools/bedrock-host.py` on the laptop, then try again"));
         }
         if !send(&[b"CONNECT", ssid.as_bytes(), password]) {
             return Err(Msg::new(b"could not talk to the Wi-Fi helper"));
         }
         let mut buf = [0u8; 128];
-        match read_line(&mut buf, deadline(40_000)) {
+        match read_line(&mut buf, deadline(60_000)) {
             Some(n) => parse_reply(&buf[..n]),
             None => Err(Msg::new(b"no answer: the connection took too long")),
         }
@@ -313,6 +332,16 @@ pub mod link {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn splits_name_and_password() {
+        assert_eq!(split_name_password("MOJO-JAN-B-F7 hunter22"), Some(("MOJO-JAN-B-F7", "hunter22")));
+        assert_eq!(split_name_password("\"My Home WiFi\" pass with space "), Some(("My Home WiFi", "pass with space")));
+        assert_eq!(split_name_password("Cafe"), Some(("Cafe", "")));
+        assert_eq!(split_name_password("\"Open Net\""), Some(("Open Net", "")));
+        assert_eq!(split_name_password("  "), None);
+        assert_eq!(split_name_password("\"unclosed"), None);
+    }
 
     #[test]
     fn parses_network_lines() {
