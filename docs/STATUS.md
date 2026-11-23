@@ -11,11 +11,11 @@ Last update: 2026-11-23, milestone 3 (part 7: window manager, Notes, Tasks, Help
 | Feature | Status | How it was checked |
 |---|---|---|
 | One-command build (`cargo xtask build`): `.efi`, `out/usb/`, `.img`, `.vdi` | done | Run on Windows 11 with Rust 1.100, Python 3.14, VirtualBox 7.2.22 |
-| Disk image: GPT, FAT32 ESP + empty FAT32 `BRDATA` data partition | done | Booted by VirtualBox EFI; data partition not used by the OS yet |
+| Disk image: GPT, FAT32 ESP + empty FAT32 `BRDATA` data partition | done | Booted by VirtualBox EFI. The ESP is labelled `AEON` so the OS may write its saved files (AEONFS.BIN) there; `BRDATA` stays unused |
 | VirtualBox scripts (`scripts/vbox.ps1`, `.bat`, `.sh`) | done (Windows); `.sh` untested | `vbox.ps1` created the VM and booted it; `vbox.sh` written, not run (no Linux/macOS host here) |
 | Boot in VirtualBox to the shell, 1024x768 and 1920x1080 | done, untested on hardware | `tests/vbox_boot.py`: 10/10 checks (serial markers, no panic, screenshot size, non-blank) |
 | Screen mode: keep firmware's mode when it is ≥1024x720 | done | unit test + VirtualBox at both sizes (before: VirtualBox's 7680x4320 was chosen) |
-| Host unit tests | done | `cargo xtask test`: 731 passed, 3 ignored (preview image writers) |
+| Host unit tests | done | `cargo xtask test`: 735 passed, 3 ignored (preview image writers) |
 | Clippy `-D warnings` (UEFI build and host library) | done | `cargo xtask clippy` clean |
 | Kernel: paging W^X, LAPIC timer, preemptive scheduler, ring 3, fork/exec/pipes | inherited | boots in VirtualBox (`lapic timer ok hz=100`, scheduler tasks start) |
 | e1000 driver | inherited | bound in VirtualBox (`net bound Intel e1000 (8086:100e)`); DHCP not yet re-checked |
@@ -38,13 +38,30 @@ Last update: 2026-11-23, milestone 3 (part 7: window manager, Notes, Tasks, Help
 | ChatBox window (was "Terminal"): own title bar with the bedrock icon from `assets/bedrock.jpg` (converted by `tools/genicon.py`, background removed), name on the left, minimise / maximise / close on the right, small corner radius | done, untested on hardware | Host preview images and VirtualBox screenshot at 1920x1080; unit tests for the icon data and button positions |
 | Window manager + compositor: several windows (ChatBox, Notes, Tasks, Help), click to focus/raise, drag by title bar, close and minimise buttons, dock opens apps and shows open-app dots, Ctrl+T cycles windows; console draws off-screen and only changed rectangles are copied to the screen | done, partly checked | Unit tests (`wm`, `apps`, clipped redraw = full redraw); VirtualBox: boot test 10/10, Help opened from the dock and drawn under ChatBox. Notes/Tasks typing not yet checked in VirtualBox. No resize (maximise shows a message) |
 | Notes app (sidebar, editor, Ctrl+N/Ctrl+D, auto-save to /notes) and Tasks app (add, done, delete, progress, /tasks.txt), Help app (searches the shell command table) | done, unit-tested; VirtualBox only partly checked | Saved to the RAM file system and then to the USB stick if there is one; in VirtualBox there is no stick, so they are lost at power-off (the shell says so) |
-| Window manager: resize, focus, several windows, close/minimise buttons | not done (the minimise, maximise and close buttons are drawn but do nothing yet) | rest of milestone 3 |
+| Window manager: maximise / restore, focus, several windows, close / minimise | done for the apps; ChatBox keeps its size (its console has a fixed text grid) | unit test `maximise_and_restore`; the maximise button is wired in `bootfx::press` (clicking it was not injected in VirtualBox: the injected mouse only moves right/down there) |
 | USB mouse in VirtualBox | done | Fixed the inherited xHCI driver: VirtualBox's USB mouse stalls SET_PROTOCOL and SET_IDLE; endpoint 0 is now reset after a stall and the mouse is used anyway. Checked: `USB mouse ready` in the log; movement injected with the VirtualBox COM API (`PutMouseEvent`) arrives as reports and moves the pointer (`mouse` command and screenshot) |
 | Mouse pointer on the whole desktop | done | VirtualBox: movement injected with `PutMouseEvent`; screenshots show the pointer inside the Terminal window (drawn by the console) and on the top panel (drawn by the desktop), with nothing left behind when it crosses between them. Clicks are read but do nothing yet. Inherited glitch: a small pointer fragment can stay behind when text is drawn under the pointer |
 | VirtualBox USB tablet (absolute pointer, the VirtualBox default) | not done: no tablet driver, so the scripts set the VM to a USB mouse (click into the VM window to capture it, Right Ctrl releases) | — |
-| Apps: Notes, Tasks, Browser, Wi-Fi, Settings | not done | milestones 4–10 |
+| Apps: Notes, Tasks, Help, Settings | done | Settings: About, Network (live address, gateway, DNS), System (uptime, memory, task list refreshed every second), Display. VirtualBox: `open settings`, arrow keys to System, screenshot shows live tasks. Browser and Wi-Fi apps: milestones 8 and 9 (not done) |
 | Notes / tasks persistence | done in VirtualBox | Saved to the USB stick, or without one to the computer's own disk (AHCI write added; boot volume labelled AEON). Written twice (AEONFS.NEW then AEONFS.BIN) so a power cut leaves one whole copy. Checked: `task add`, `save`, VM reset, `task list` shows the task again |
 | Network manager, own Wi-Fi, simulated AP | not done | milestone 8 |
 | Wi-Fi chip drivers | not done: **no supported chip yet** | milestone 8 |
 | Browser, HTTPS | not done | milestone 9 |
 | Apps as ring-3 programs | not done: apps will run as kernel tasks first | — |
+
+## Added in this round (milestones 3–7 and 10, without 8 and 9)
+
+| Feature | Status | How it was checked |
+|---|---|---|
+| Command palette (Ctrl+Space): search apps and commands, Enter opens the app or types the command into ChatBox | done | unit test `palette_finds_apps_and_commands`; VirtualBox: Ctrl+Space, typed `net`, Down, Enter ran `nettest` in ChatBox |
+| Top bar: Wi-Fi bars (bright when the host connection is up) and battery (shown full: VirtualBox reports no battery) | done | VirtualBox screenshot |
+| Commands: `calc`, `neofetch`, `about`, `cmds`, `keys`, `open <app>`, `uuid`, `rand`, `fortune`, `base64`, `bench`, `todo-today`, `note`, `nettest` | done | unit tests for `calc`; each typed in VirtualBox, screenshots |
+| `nettest`: link, address, gateway ping, DNS, HTTP fetch as a pass/fail table | done | VirtualBox (NAT): 5 of 5 passed |
+| Pipes into text filters: `sort [-n] [-r]`, `uniq`, `head`, `tail`, `grep`, `rev`, `upper`, `lower` (and `wc` from /bin) | done | VirtualBox: `help \| grep calc \| upper`, `cmds \| wc`, `ls /bin \| wc` |
+| /bin programs (`hello`, `echo`, `cat`, `ls`, `wc`, `forktest`) | fixed | They crashed at start: the large code model puts code in `.ltext`, which the linker script left in the read-only segment. Script fixed, programs rebuilt. VirtualBox: all six run, `forktest` child exits 7 |
+| SSE registers kept across system calls | fixed | kernel code (desktop drawing) uses SSE; the syscall entry now saves and restores them with `fxsave` / `fxrstor` |
+| Notes: undo / redo (Ctrl+Z / Ctrl+Y), find (Ctrl+F), rename (Ctrl+R), copy / cut / paste line (Ctrl+C / X / V) | done | unit test `notes_undo_redo_find_rename_and_paste`; VirtualBox: Ctrl+F found a word |
+| Notes to and from `.txt` files: `note list`, `note export <title> <file>`, `note import <file> [title]` | done | VirtualBox: import, export, `cat` of the exported file |
+| System task manager | done (Settings > System) | VirtualBox screenshot |
+| Notes and tasks survive a reboot in VirtualBox | done | `task add`, `save`, VM reset, `task list` shows the task |
+| Skipped by request | — | light theme, Alt+key app shortcuts, task due dates / priorities / filters, Pomodoro timer, milestones 8 (Wi-Fi) and 9 (browser) |

@@ -4,17 +4,47 @@ A small x86_64 UEFI operating system in Rust (`no_std`, no third-party crates in
 the Aeon 0.11.0 kernel. The goal: an animated boot, a graphical desktop with Notes, Tasks, a Browser, a
 Terminal, Wi-Fi and Settings apps, running by itself in VirtualBox and from a USB stick on real UEFI PCs.
 
-**Current state: milestone 3 of 10, first part.** It boots in VirtualBox with an animated boot screen and
-boot menu, then fades into a desktop with a top panel and a Terminal window running the shell. There is no
-window manager, mouse support on the desktop, or other apps yet. See
-[`docs/STATUS.md`](docs/STATUS.md) for exactly what is done and tested, and [`docs/PLAN.md`](docs/PLAN.md)
-for the design.
+**Current state: release 0.1.0: milestones 1–7 and 10 done; 8 (own Wi-Fi drivers) and 9 (browser) are
+not.** It boots in VirtualBox with an animated boot screen and boot menu, then fades into a desktop with:
+
+- a top bar with the clock and Wi-Fi and battery icons, and a dock to open apps;
+- windows you can move, focus, minimise, close and (apps) maximise, Ctrl+T switches between them;
+- **ChatBox**, the shell: more than 100 commands (`help`, `cmds`), pipes, redirects and /bin programs;
+- **Notes** (undo/redo, find, rename, line copy/paste, `.txt` import/export), **Tasks**, **Help**, and
+  **Settings** (about, network, live system and task view, display);
+- a **command palette** (Ctrl+Space) that opens apps or runs commands;
+- networking through the laptop's connection (`nettest` checks link, address, gateway, DNS and HTTP);
+- files, notes and tasks saved to the VM disk (or a USB stick), so they survive a reboot.
+
+See [`docs/STATUS.md`](docs/STATUS.md) for exactly what is done and how it was tested, and
+[`docs/PLAN.md`](docs/PLAN.md) for the design.
 
 ## Screenshots (VirtualBox, captured from real boots)
 
-Desktop with the shell in the Terminal window (1920x1080, `help` typed):
+Desktop with ChatBox (1920x1080, `nettest` run from the command palette):
 
 ![Desktop](docs/img/desktop-1920x1080.png)
+
+| Command palette (Ctrl+Space) | Settings: live system and task view |
+|---|---|
+| ![Palette](docs/img/palette-1920x1080.png) | ![Settings](docs/img/settings-1920x1080.png) |
+
+Notes with find (Ctrl+F) next to ChatBox:
+
+![Notes](docs/img/notes-1920x1080.png)
+
+## Using it
+
+| Keys | What they do |
+|---|---|
+| Ctrl+Space | command palette: type, Up/Down, Enter; Esc closes |
+| Ctrl+T | next window |
+| ChatBox | Tab completes, Ctrl+Up/Down history, Up/Down/PgUp/PgDn scroll, Ctrl+L clear, Ctrl+C cancel |
+| Notes | Ctrl+N new, Ctrl+D delete, Ctrl+R rename, Ctrl+F find, Ctrl+Z/Y undo/redo, Ctrl+C/X/V line, Ctrl+Up/Down switch note |
+| Tasks | type + Enter adds, Down selects, Space done, Delete removes |
+
+Useful commands: `help`, `cmds`, `keys`, `open <app>`, `nettest`, `neofetch`, `calc (2+3)*4`, `task add <text>`,
+`note list`, `help | grep net`.
 
 | Boot menu with countdown (1920x1080) | Boot progress driven by real stages (1920x1080) |
 |---|---|
