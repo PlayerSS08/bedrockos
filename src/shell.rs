@@ -485,7 +485,8 @@ fn persist_restore() {
     if !crate::xhci::has_storage() {
         crate::xhci::rescan();
     }
-    if let Ok(bytes) = crate::usbfs::hw_read(crate::usbfs::rel_path(SNAPSHOT), crate::persist::MAX_TOTAL + 4096) {
+    let usb = crate::usbfs::hw_read(crate::usbfs::rel_path(SNAPSHOT), crate::persist::MAX_TOTAL + 4096).ok();
+    if let Some(bytes) = usb.or_else(disk_load) {
         match crate::persist::decode(&bytes) {
             Ok(entries) => {
                 let (mut n, mut skipped) = (0usize, 0usize);
@@ -503,7 +504,7 @@ fn persist_restore() {
                     };
                     n += 1;
                 }
-                out!("restored {} saved item(s) from the USB stick\n", n);
+                out!("restored {} saved item(s)\n", n);
                 if skipped > 0 {
                     out!("ignored {} saved item(s) under system paths (/etc, /usr, /var, /bin)\n", skipped);
                 }
@@ -534,13 +535,16 @@ fn persist_save(force: bool) {
     if !crate::xhci::has_storage() {
         crate::xhci::rescan();
     }
-    match save_bytes(SNAPSHOT, &bytes) {
-        Ok(_) => {
+    // The USB stick first; without one, the computer's own disk (the VM disk in VirtualBox).
+    let usb = if crate::xhci::has_storage() { save_bytes(SNAPSHOT, &bytes).map(|_| "the USB stick") } else { Err(String::from("no USB drive connected")) };
+    let result = usb.or_else(|e| disk_save(&bytes).map(|()| "the disk").map_err(|d| alloc::format!("{e}; disk: {d}")));
+    match result {
+        Ok(place) => {
+            if force {
+                out!("saved {} item(s), {} bytes, to {}; they come back at the next boot\n", entries.len(), bytes.len(), place);
+            }
             SAVED_FP.store(fp, Relaxed);
             UNSAVED.store(false, Relaxed);
-            if force {
-                out!("saved {} item(s), {} bytes, to the USB stick; they come back at the next boot\n", entries.len(), bytes.len());
-            }
         }
         Err(e) => {
             // Remember the state so every later command does not retry (and stall) again.
@@ -551,6 +555,26 @@ fn persist_save(force: bool) {
             }
         }
     }
+}
+
+/// Saves the file snapshot on the computer's own disk (the first FAT volume of the AHCI disk). Written twice,
+/// first as AEONFS.NEW, then as AEONFS.BIN, so a power cut in the middle of one write leaves the other whole
+/// (restore takes the first one that decodes).
+fn disk_save(data: &[u8]) -> Result<(), &'static str> {
+    crate::ahci::with_disk(|d| {
+        crate::usbfs::write_file(d, "AEONFS.NEW", data, true)?;
+        crate::usbfs::write_file(d, "AEONFS.BIN", data, true)
+    })
+    .ok_or("no disk")?
+}
+
+fn disk_load() -> Option<Vec<u8>> {
+    crate::ahci::with_disk(|d| {
+        ["AEONFS.BIN", "AEONFS.NEW"].iter().find_map(|name| {
+            crate::usbfs::read_file(d, name, crate::persist::MAX_TOTAL + 4096).ok().filter(|b| crate::persist::decode(b).is_ok())
+        })
+    })
+    .flatten()
 }
 
 /// The USB controller and what it found, as text (for `usb` and for `report`).

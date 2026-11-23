@@ -43,7 +43,7 @@ Last update: 2026-11-23, milestone 3 (part 7: window manager, Notes, Tasks, Help
 | Mouse pointer on the whole desktop | done | VirtualBox: movement injected with `PutMouseEvent`; screenshots show the pointer inside the Terminal window (drawn by the console) and on the top panel (drawn by the desktop), with nothing left behind when it crosses between them. Clicks are read but do nothing yet. Inherited glitch: a small pointer fragment can stay behind when text is drawn under the pointer |
 | VirtualBox USB tablet (absolute pointer, the VirtualBox default) | not done: no tablet driver, so the scripts set the VM to a USB mouse (click into the VM window to capture it, Right Ctrl releases) | — |
 | Apps: Notes, Tasks, Browser, Wi-Fi, Settings | not done | milestones 4–10 |
-| Notes / tasks persistence | not done | milestone 5–6 |
+| Notes / tasks persistence | done in VirtualBox | Saved to the USB stick, or without one to the computer's own disk (AHCI write added; boot volume labelled AEON). Written twice (AEONFS.NEW then AEONFS.BIN) so a power cut leaves one whole copy. Checked: `task add`, `save`, VM reset, `task list` shows the task again |
 | Network manager, own Wi-Fi, simulated AP | not done | milestone 8 |
 | Wi-Fi chip drivers | not done: **no supported chip yet** | milestone 8 |
 | Browser, HTTPS | not done | milestone 9 |

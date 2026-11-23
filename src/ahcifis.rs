@@ -141,6 +141,16 @@ pub fn read_dma_ext_fis(lba: u64, sectors: u16) -> Option<[u8; FIS_LEN]> {
     Some(h2d(CMD_READ_DMA_EXT, lba, sectors))
 }
 
+pub const CMD_WRITE_DMA_EXT: u8 = 0x35;
+
+/// FIS for WRITE DMA EXT of `sectors` (1 to 65535) to `lba` (48 bits).
+pub fn write_dma_ext_fis(lba: u64, sectors: u16) -> Option<[u8; FIS_LEN]> {
+    if sectors == 0 || lba >> 48 != 0 {
+        return None;
+    }
+    Some(h2d(CMD_WRITE_DMA_EXT, lba, sectors))
+}
+
 /// Command list entry (32 bytes) for a read: FIS of 5 dwords, `prdt_entries` entries, and the physical
 /// address of the command table, which must be 128-byte aligned.
 pub fn command_header(prdt_entries: u16, table: u64) -> Option<[u8; 32]> {

@@ -76,8 +76,16 @@ fn start_engine(pb: u64) -> bool {
 impl AhciDisk {
     /// Sends one command whose data (at most one bounce buffer) lands in the bounce buffer.
     fn issue(&mut self, fis_bytes: &[u8; fis::FIS_LEN], bytes: u32) -> Result<(), BlockError> {
+        self.issue_dir(fis_bytes, bytes, false)
+    }
+
+    /// Like `issue`; `write` sets the header's W bit (data goes from the bounce buffer to the disk).
+    fn issue_dir(&mut self, fis_bytes: &[u8; fis::FIS_LEN], bytes: u32, write: bool) -> Result<(), BlockError> {
         let table = self.page + TABLE_OFFSET;
-        let header = fis::command_header(1, table).ok_or(BlockError::Io)?;
+        let mut header = fis::command_header(1, table).ok_or(BlockError::Io)?;
+        if write {
+            header[0] |= 1 << 6;
+        }
         let prd = fis::prd_entry(self.bounce, bytes).ok_or(BlockError::BadRequest)?;
         let pb = self.pb;
         // SAFETY: `page` is a DMA page this driver owns; the command list (slot 0) is at its start and the
@@ -136,6 +144,24 @@ impl BlockDev for AhciDisk {
             // SAFETY: the command finished, so the controller no longer writes the bounce buffer, which holds
             // `n * 512` valid bytes; the destination slice has at least that many bytes left.
             unsafe { copy_nonoverlapping(self.bounce as *const u8, buf[done..].as_mut_ptr(), n * SECTOR_SIZE) };
+            done += n * SECTOR_SIZE;
+        }
+        Ok(())
+    }
+}
+
+impl crate::block::BlockWrite for AhciDisk {
+    fn write(&mut self, lba: u64, buf: &[u8]) -> Result<(), BlockError> {
+        check_request(self.sectors, lba, buf.len())?;
+        let mut done = 0usize;
+        while done < buf.len() {
+            let n = ((buf.len() - done) / SECTOR_SIZE).min(MAX_SECTORS);
+            let cmd = fis::write_dma_ext_fis(lba + (done / SECTOR_SIZE) as u64, n as u16).ok_or(BlockError::BadRequest)?;
+            // SAFETY: no command is running, so the bounce buffer (at least MAX_SECTORS sectors) is ours to fill;
+            // the source slice has at least `n * 512` bytes left.
+            unsafe { copy_nonoverlapping(buf[done..].as_ptr(), self.bounce as *mut u8, n * SECTOR_SIZE) };
+            fence(Ordering::Release);
+            self.issue_dir(&cmd, (n * SECTOR_SIZE) as u32, true)?;
             done += n * SECTOR_SIZE;
         }
         Ok(())
