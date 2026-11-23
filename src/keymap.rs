@@ -101,6 +101,7 @@ impl Keyboard {
             match c.to_ascii_lowercase() {
                 b'c' => return Some(Key::Interrupt),
                 b'l' => return Some(Key::ClearScreen),
+                b' ' => return Some(Key::Ctrl(b' ')),
                 l if l.is_ascii_lowercase() => return Some(Key::Ctrl(l)),
                 _ => {}
             }

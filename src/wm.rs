@@ -57,6 +57,19 @@ impl Wm {
         self.order.iter().rev().copied().find(|&a| self.rects[a].contains(x, y))
     }
 
+    /// Maximises `app` to the whole free area, or puts it back to its size before. Returns the old rectangle.
+    pub fn toggle_max(&mut self, app: usize, saved: &mut [Option<Rect>; N]) -> Rect {
+        let old = self.rects[app];
+        self.rects[app] = match saved[app].take() {
+            Some(r) => r,
+            None => {
+                saved[app] = Some(old);
+                self.area
+            }
+        };
+        old
+    }
+
     /// Moves `app`'s top-left corner to (`x`, `y`), kept inside the free area. Returns the old rectangle.
     pub fn move_to(&mut self, app: usize, x: i32, y: i32) -> Rect {
         let r = self.rects[app];
@@ -86,6 +99,18 @@ mod tests {
         r[1] = Rect::new(150, 150, 200, 100);
         r[3] = Rect::new(50, 50, 400, 300);
         Wm::new(r, Rect::new(0, 40, 800, 500))
+    }
+
+    #[test]
+    fn maximise_and_restore() {
+        let mut w = wm();
+        let before = w.rect(1);
+        let mut saved = [None; N];
+        assert_eq!(w.toggle_max(1, &mut saved), before);
+        assert_eq!(w.rect(1), w.area);
+        w.toggle_max(1, &mut saved);
+        assert_eq!(w.rect(1), before);
+        assert_eq!(saved[1], None);
     }
 
     #[test]

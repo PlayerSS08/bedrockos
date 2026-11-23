@@ -91,9 +91,9 @@ impl DeskLayout {
         let body = Rect::new(window.x + 1, window.y + title_h, window.w - 2, window.h - title_h - 10);
         let pad = if big { 12 } else { 8 };
         let term = Rect::new(body.x + pad, body.y + pad / 2, body.w - 2 * pad, body.h - pad / 2);
-        let clock_w = if big { 360 } else { 260 };
+        let clock_w = if big { 460 } else { 320 };
         let clock = Rect::new(wi - clock_w - 12, 0, clock_w, panel_h);
-        let message = Rect::new(wi / 2 - wi / 5, 0, 2 * (wi / 5), panel_h);
+        let message = Rect::new(wi / 2 - wi / 6, 0, 2 * (wi / 6), panel_h);
         DeskLayout { w: wi, h: hi, panel, window, title_h, body, term, clock, dock, icon, message }
     }
 
@@ -194,10 +194,38 @@ pub fn draw_panel_text(c: &mut Canvas, l: &DeskLayout, clock: &str, msg: &str) {
     let r = l.clock;
     let tw = canvas::text_width(f, clock, 0);
     c.text(f, r.right() - tw - 8, ty, clock, DARK.text, 1.0);
+    status_icons(c, r.right() - tw - 24, l.panel.y + l.panel.h / 2, f.height as i32);
     if !msg.is_empty() {
         let m = l.message;
         let tw = canvas::text_width(f, msg, 0);
         c.text(f, m.x + (m.w - tw) / 2, ty, msg, DARK.warn, 1.0);
+    }
+}
+
+/// Is the network (the laptop's connection, in VirtualBox) up? Set by the kernel, shown in the panel.
+pub static NET_UP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
+
+/// Wi-Fi signal bars and a battery, right-aligned to `right`, centred on `cy`. The bars are bright when the
+/// network is up. The battery shows mains power (full, with a bolt): neither VirtualBox nor the firmware
+/// report a battery to BedrockOS.
+fn status_icons(c: &mut Canvas, right: i32, cy: i32, size: i32) {
+    let u = (size / 6).max(2);
+    // Battery: body, nub, fill.
+    let (bw, bh) = (u * 6, u * 3);
+    let bx = right - bw - u;
+    let by = cy - bh / 2;
+    c.round_rect_stroke(bx as f32 + 0.5, by as f32 + 0.5, bw as f32, bh as f32, u as f32 * 0.6, 1.5, DARK.text, 0.9);
+    c.fill_rect(Rect::new(bx + bw + 1, cy - u / 2 - 1, (u / 2).max(2), u + 2), DARK.text);
+    c.fill_rect(Rect::new(bx + 3, by + 3, bw - 5, bh - 5), DARK.good);
+    // Signal bars.
+    let up = NET_UP.load(core::sync::atomic::Ordering::Relaxed);
+    let col = if up { DARK.text } else { DARK.text_dim };
+    let base = cy + bh / 2 + 1;
+    let mut x = bx - u * 2 - 4 * (u + u / 2);
+    for i in 1..=4 {
+        let h = u * i + u / 2;
+        c.fill_rect(Rect::new(x, base - h, u, h), if up || i == 1 { col } else { rgb(70, 78, 100) });
+        x += u + u / 2;
     }
 }
 

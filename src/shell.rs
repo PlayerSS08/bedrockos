@@ -4116,7 +4116,10 @@ pub extern "C" fn shell_task(_: usize) {
         usermode::reap_demos();
         // Keys come from the PS/2 controller and from a USB keyboard (xHCI driver), whichever has one.
         loop {
-            let key = if let Some(code) = ps2_byte() {
+            let key = if let Some(key) = crate::bootfx::injected_key() {
+                idle = false;
+                key
+            } else if let Some(code) = ps2_byte() {
                 idle = false;
                 let Some(key) = kbd.feed(code) else { continue };
                 key

@@ -304,7 +304,7 @@ impl Notes {
         let edited = match k {
             Key::Ctrl(b'z') => self.undo(),
             Key::Ctrl(b'y') => self.redo(),
-            Key::Ctrl(b'c') => {
+            Key::Ctrl(b'c') | Key::Interrupt => {
                 self.clip = self.doc.line(self.doc.cursor().0).to_vec();
                 self.clip.push(b'\n');
                 self.save_note = "Line copied";
@@ -674,6 +674,93 @@ impl Tasks {
     }
 }
 
+// ---- Command palette (Ctrl+Space) ---------------------------------------------------------------------------
+
+/// What a palette entry does.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Pick {
+    /// Open the desktop app with this index (`desktop::APPS`).
+    App(usize),
+    /// Type this command into ChatBox and run it.
+    Command(&'static str),
+}
+
+#[derive(Default)]
+pub struct Palette {
+    pub query: String,
+    pub sel: usize,
+}
+
+pub const PALETTE_ROWS: usize = 8;
+
+impl Palette {
+    /// The entries matching the query (apps first, then commands), at most `PALETTE_ROWS`.
+    pub fn matches(&self) -> Vec<(String, &'static str, Pick)> {
+        let q = self.query.trim().to_ascii_lowercase();
+        let mut v = Vec::new();
+        for (i, (name, later)) in crate::desktop::APPS.iter().enumerate() {
+            if later.is_none() && name.to_ascii_lowercase().contains(q.as_str()) {
+                v.push((format!("Open {name}"), "app", Pick::App(i)));
+            }
+        }
+        for c in crate::cmdhelp::COMMANDS {
+            if c.name.contains(q.as_str()) || (!q.is_empty() && c.about.to_ascii_lowercase().contains(q.as_str())) {
+                v.push((format!("{}  -  {}", c.name, c.about), "command", Pick::Command(c.name)));
+            }
+        }
+        v.truncate(PALETTE_ROWS);
+        v
+    }
+
+    /// A key; `Some(pick)` when Enter chose an entry. Esc is handled by the caller (closes the palette).
+    pub fn key(&mut self, k: Key) -> Option<Pick> {
+        match k {
+            Key::Char(b) if (32..127).contains(&b) && self.query.len() < 40 => {
+                self.query.push(b as char);
+                self.sel = 0;
+            }
+            Key::Backspace => {
+                self.query.pop();
+                self.sel = 0;
+            }
+            Key::Up => self.sel = self.sel.saturating_sub(1),
+            Key::Down | Key::Tab => self.sel = (self.sel + 1).min(self.matches().len().saturating_sub(1)),
+            Key::Enter => return self.matches().get(self.sel).map(|m| m.2),
+            _ => {}
+        }
+        None
+    }
+
+    /// Where the palette is drawn on a `w` x `h` screen below a panel `top` pixels high.
+    pub fn rect(w: i32, top: i32, f: &Fonts) -> Rect {
+        let pw = (w - 80).min(720);
+        let row = f.sans.height as i32 + 14;
+        Rect::new((w - pw) / 2, top + 80, pw, row * (PALETTE_ROWS as i32 + 1) + 28)
+    }
+
+    pub fn draw(&self, c: &mut Canvas, r: Rect, f: &Fonts) {
+        let row = f.sans.height as i32 + 14;
+        c.shadow(r.x as f32, r.y as f32 + 6.0, r.w as f32, r.h as f32, 12.0, 24.0, 0, 0.55);
+        c.round_rect(r.x as f32, r.y as f32, r.w as f32, r.h as f32, 12.0, rgb(28, 33, 52), 1.0);
+        c.round_rect_stroke(r.x as f32 + 0.5, r.y as f32 + 0.5, r.w as f32 - 1.0, r.h as f32 - 1.0, 12.0, 1.0, DARK.accent, 0.8);
+        let x = r.x + 18;
+        let q = if self.query.is_empty() { String::from("Type an app or command...") } else { format!("{}_", self.query) };
+        text(c, f.sans, x, r.y + 14, &q, if self.query.is_empty() { DARK.text_dim } else { DARK.text });
+        c.fill_rect(Rect::new(r.x + 10, r.y + row + 10, r.w - 20, 1), DARK.border);
+        clipped(c, r, |c| {
+            for (i, (label, kind, _)) in self.matches().iter().enumerate() {
+                let ry = r.y + row + 16 + i as i32 * row;
+                if i == self.sel {
+                    c.round_rect((r.x + 8) as f32, ry as f32, (r.w - 16) as f32, (row - 2) as f32, 6.0, SELECTED, 1.0);
+                }
+                let kw = canvas::text_width(f.sans, kind, 0);
+                clipped(c, Rect::new(x, ry, r.right() - kw - 40 - x, row), |c| text(c, f.sans, x, ry + 7, label, DARK.text));
+                text(c, f.sans, r.right() - kw - 18, ry + 7, kind, DARK.text_dim);
+            }
+        });
+    }
+}
+
 // ---- Settings ---------------------------------------------------------------------------------------------
 
 /// The pages of the Settings window. Their text comes from the kernel (live values) on every redraw.
@@ -850,6 +937,28 @@ mod tests {
         for b in s.bytes() {
             n.key(Key::Char(b));
         }
+    }
+
+    #[test]
+    fn palette_finds_apps_and_commands() {
+        let mut p = Palette::default();
+        assert!(p.matches().iter().any(|m| m.2 == Pick::App(crate::desktop::SETTINGS)));
+        for b in b"set" {
+            p.key(Key::Char(*b));
+        }
+        assert_eq!(p.key(Key::Enter), Some(Pick::App(crate::desktop::SETTINGS)), "apps come first");
+        let mut p = Palette::default();
+        for b in b"nettest" {
+            p.key(Key::Char(*b));
+        }
+        assert_eq!(p.key(Key::Enter), Some(Pick::Command("nettest")));
+        p.key(Key::Backspace);
+        assert_eq!(p.query, "nettes");
+        let mut p = Palette::default();
+        for b in b"zzzz" {
+            p.key(Key::Char(*b));
+        }
+        assert_eq!(p.key(Key::Enter), None);
     }
 
     #[test]

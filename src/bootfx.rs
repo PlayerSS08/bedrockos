@@ -13,7 +13,7 @@ use crate::anim::{self, Smoother};
 use crate::arch;
 use crate::bootinfo::FbInfo;
 use crate::bootscene::{Dirty, MenuView, Scene, View};
-use crate::apps::{parse_tasks, Effect, Fonts, Help, Notes, Settings, Tasks, NOTES_DIR, TASKS_FILE};
+use crate::apps::{parse_tasks, Effect, Fonts, Help, Notes, Palette, Pick, Settings, Tasks, NOTES_DIR, TASKS_FILE};
 use crate::desktop::{self, DeskLayout, APPS, CHATBOX, HELP, NOTES, SETTINGS, TASKS};
 use crate::keymap::Key;
 use crate::wm::Wm;
@@ -242,6 +242,10 @@ struct Desk {
     tasks: Option<Tasks>,
     help: Help,
     settings: Settings,
+    /// The command palette, while open (Ctrl+Space).
+    palette: Option<Palette>,
+    /// Size of each maximised window before it was maximised.
+    maxed: [Option<Rect>; crate::wm::N],
     /// Last time the live Settings page was refreshed (TSC).
     settings_at: u64,
     /// Panel message and when it was shown (TSC).
@@ -308,6 +312,8 @@ fn enter_desktop() -> bool {
             tasks: None,
             help: Help::new(),
             settings: Settings::default(),
+            maxed: [None; crate::wm::N],
+            palette: None,
             settings_at: 0,
             msg: String::new(),
             msg_at: None,
@@ -401,6 +407,10 @@ fn compose(d: &mut Desk, fb: &FbInfo, r: Rect) {
         }
         c.set_clip(old);
     }
+    if let Some(p) = d.palette.as_ref() {
+        let pr = Palette::rect(w as i32, d.l.panel.h, &f);
+        p.draw(&mut c, pr, &f);
+    }
     let mut open = [false; APPS.len()];
     for &a in d.wm.order() {
         open[a] = true;
@@ -448,6 +458,11 @@ pub fn desk_tick() {
             let r = d.l.clock;
             redraw(d, &fb, r);
         }
+        let up = crate::netdev::link_up();
+        if desktop::NET_UP.swap(up, core::sync::atomic::Ordering::Relaxed) != up {
+            let r = d.l.clock;
+            redraw(d, &fb, r);
+        }
         // The Settings window shows live values (uptime, memory, tasks): refresh it every second.
         if d.wm.is_open(SETTINGS) && us_since(d.settings_at) >= 1_000_000 {
             d.settings_at = arch::rdtsc();
@@ -483,7 +498,7 @@ fn console_to_screen(d: &mut Desk, fb: &FbInfo) {
     }
     let t = d.l.term_in(d.wm.rect(CHATBOX));
     let r = Rect::new(t.x, t.y + a as i32, t.w, (b - a + 1) as i32).intersect(&Rect::new(0, 0, fb.width as i32, fb.height as i32));
-    if d.wm.focused() != Some(CHATBOX) {
+    if d.wm.focused() != Some(CHATBOX) || d.palette.is_some() {
         redraw(d, fb, r);
         return;
     }
@@ -756,7 +771,14 @@ fn press(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
     if min.contains(x, y) || close.contains(x, y) {
         hide_app(d, fb, app);
     } else if max.contains(x, y) {
-        set_message(d, fb, "Resizing windows comes in a later version");
+        if app == CHATBOX {
+            set_message(d, fb, "ChatBox keeps its size; the apps can be maximised");
+        } else {
+            let old = d.wm.toggle_max(app, &mut d.maxed);
+            redraw(d, fb, old.inflate(desktop::SHADOW));
+            let r = win_area(d, app);
+            redraw(d, fb, r);
+        }
     } else if desktop::title_bar(win, th).contains(x, y) {
         d.drag = Some((app, x - win.x, y - win.y));
         d.drag_drawn = 0;
@@ -802,9 +824,59 @@ pub fn open_named(name: &str) -> Result<(), &'static str> {
     })
 }
 
+/// Keys the palette queued for the shell (a chosen command, typed into ChatBox).
+static INJECT: Global<alloc::collections::VecDeque<Key>> = Global::new(alloc::collections::VecDeque::new());
+
+/// The next key the command palette typed for the shell, if any.
+pub fn injected_key() -> Option<Key> {
+    // SAFETY: rule A: INJECT is only touched by the shell task (here and in `desk_key`, which it calls).
+    arch::without_interrupts(|| unsafe { INJECT.get() }.pop_front())
+}
+
+fn palette_key(d: &mut Desk, fb: &FbInfo, k: Key) {
+    let f = Fonts::for_screen(d.l.big());
+    let pr = Palette::rect(fb.width as i32, d.l.panel.h, &f).inflate(40);
+    let pick = match (k, d.palette.as_mut()) {
+        (Key::Esc | Key::Ctrl(b' '), _) => {
+            d.palette = None;
+            redraw(d, fb, pr);
+            return;
+        }
+        (_, Some(p)) => p.key(k),
+        (_, None) => None,
+    };
+    if let Some(pick) = pick {
+        d.palette = None;
+        redraw(d, fb, pr);
+        match pick {
+            Pick::App(a) => open_app(d, fb, a),
+            Pick::Command(name) => {
+                open_app(d, fb, CHATBOX);
+                // SAFETY: as in `injected_key`.
+                let q = unsafe { INJECT.get() };
+                q.extend(name.bytes().map(Key::Char));
+                q.push_back(Key::Enter);
+            }
+        }
+    } else {
+        redraw(d, fb, pr);
+    }
+}
+
 pub fn desk_key(k: Key) -> bool {
     arch::without_interrupts(|| {
         let (Some(d), Some(fb)) = (desk(), state().fb) else { return false };
+        if k == Key::Ctrl(b' ') && d.palette.is_none() {
+            d.palette = Some(Palette::default());
+            let f = Fonts::for_screen(d.l.big());
+            let pr = Palette::rect(fb.width as i32, d.l.panel.h, &f).inflate(40);
+            redraw(d, &fb, pr);
+            return true;
+        }
+        if d.palette.is_some() {
+            palette_key(d, &fb, k);
+            return true;
+        }
         if k == Key::Ctrl(b't') {
             if let Some(top) = d.wm.focused() {
                 d.wm.cycle();
