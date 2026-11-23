@@ -6,7 +6,7 @@ unit-tested on the host, not yet re-verified in BedrockOS beyond booting · **no
 
 No feature has been tested on real hardware (USB stick on a PC) yet.
 
-Last update: 2026-11-23, milestone 2.
+Last update: 2026-11-23, milestone 3 (first part).
 
 | Feature | Status | How it was checked |
 |---|---|---|
@@ -15,7 +15,7 @@ Last update: 2026-11-23, milestone 2.
 | VirtualBox scripts (`scripts/vbox.ps1`, `.bat`, `.sh`) | done (Windows); `.sh` untested | `vbox.ps1` created the VM and booted it; `vbox.sh` written, not run (no Linux/macOS host here) |
 | Boot in VirtualBox to the shell, 1024x768 and 1920x1080 | done, untested on hardware | `tests/vbox_boot.py`: 10/10 checks (serial markers, no panic, screenshot size, non-blank) |
 | Screen mode: keep firmware's mode when it is ≥1024x720 | done | unit test + VirtualBox at both sizes (before: VirtualBox's 7680x4320 was chosen) |
-| Host unit tests | done | `cargo xtask test`: 713 passed, 2 ignored (one is the preview image writer) |
+| Host unit tests | done | `cargo xtask test`: 717 passed, 2 ignored (preview image writers) |
 | Clippy `-D warnings` (UEFI build and host library) | done | `cargo xtask clippy` clean |
 | Kernel: paging W^X, LAPIC timer, preemptive scheduler, ring 3, fork/exec/pipes | inherited | boots in VirtualBox (`lapic timer ok hz=100`, scheduler tasks start) |
 | e1000 driver | inherited | bound in VirtualBox (`net bound Intel e1000 (8086:100e)`); DHCP not yet re-checked |
@@ -29,8 +29,13 @@ Last update: 2026-11-23, milestone 2.
 | Esc / V switches to the scrolling boot log | done (Esc) | VirtualBox: Esc sent with `keyboardputscancode` after leaving the menu; log line `switched to boot messages`, screenshot shows the log and shell. V not separately tested |
 | Safe mode skips network probing | done | VirtualBox: Down, Down, Enter in the menu; log shows `safe mode selected` and `network drivers not started` |
 | Fade out at the end of boot | done | VirtualBox screenshots show the dimmed frame, then the shell |
-| Fade into a desktop | partial: fades into the shell, since there is no desktop until milestone 3 | — |
-| Desktop GUI, window manager, apps | not done | milestones 3–10 |
+| Fade into the desktop | done | VirtualBox screenshots: boot screen fades out, desktop fades in (about 0.3 s) |
+| Desktop: wallpaper, top panel with clock, Terminal window | done, untested on hardware | VirtualBox at 1024x768 and 1920x1080: screenshots; `help` typed with key injection shows its output in the window |
+| Shell inside the Terminal window (keyboard input, scrolling, status bar) | done | VirtualBox: inherited console placed in the window rectangle |
+| Panel clock | partial: shows **UTC** (no time zone setting yet), updates every minute | VirtualBox screenshot; minute change not watched |
+| Window manager: move, resize, focus, several windows | not done | rest of milestone 3 |
+| Mouse on the desktop | not done: the USB mouse driver is inherited, but the pointer is limited to the console; the VirtualBox VM uses a USB tablet, which is not supported yet | rest of milestone 3 |
+| Apps: Notes, Tasks, Browser, Wi-Fi, Settings | not done | milestones 4–10 |
 | Notes / tasks persistence | not done | milestone 5–6 |
 | Network manager, own Wi-Fi, simulated AP | not done | milestone 8 |
 | Wi-Fi chip drivers | not done: **no supported chip yet** | milestone 8 |

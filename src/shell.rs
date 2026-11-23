@@ -3883,6 +3883,8 @@ pub extern "C" fn status_task(_: usize) {
         let bytes = line.finish();
         let bytes = &bytes[..bytes.len() - 1];
         log::with_console(|c| c.status(bytes));
+        #[cfg(target_os = "uefi")]
+        crate::bootfx::panel_tick();
         sched::sleep_ms(500);
     }
 }

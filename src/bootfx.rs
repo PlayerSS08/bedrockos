@@ -13,6 +13,8 @@ use crate::anim::{self, Smoother};
 use crate::arch;
 use crate::bootinfo::FbInfo;
 use crate::bootscene::{Dirty, MenuView, Scene, View};
+use crate::desktop::{self, DeskLayout};
+use crate::fb::Console;
 use crate::global::Global;
 use crate::gui::canvas::{Canvas, Rect};
 use crate::log;
@@ -43,6 +45,10 @@ struct State {
     hint: &'static str,
     key_poll: Option<fn() -> bool>,
     frames: u32,
+    /// Set once the desktop is on screen.
+    desk: Option<DeskLayout>,
+    /// Minute shown by the panel clock (to redraw only when it changes).
+    clock_min: u32,
 }
 
 static STATE: Global<State> = Global::new(State {
@@ -58,6 +64,8 @@ static STATE: Global<State> = Global::new(State {
     hint: "",
     key_poll: None,
     frames: 0,
+    desk: None,
+    clock_min: u32::MAX,
 });
 
 fn state() -> &'static mut State {
@@ -196,8 +204,108 @@ pub fn finish() {
     render_faded(0.0);
     let n = state().frames;
     state().active = false;
-    let _ = log::with_console(|c| c.release_to_log());
     crate::info!("bootfx", "boot animation done: {} frames", n);
+    if !enter_desktop() {
+        let _ = log::with_console(|c| c.release_to_log());
+    }
+}
+
+/// Draws the desktop, fades it in (about 0.3 s) and moves the text console into the Terminal window.
+/// Returns false (nothing changed) when the window is too small for a console.
+fn enter_desktop() -> bool {
+    let s = state();
+    let Some(fb) = s.fb else { return false };
+    let (w, h) = (fb.width, fb.height);
+    let l = DeskLayout::new(w, h);
+    // The console for the window: the same framebuffer, starting at the window's inside.
+    let t = l.term;
+    let info = FbInfo {
+        base: fb.base + ((t.y as usize * fb.stride + t.x as usize) * 4) as u64,
+        size: fb.stride * t.h as usize * 4,
+        width: t.w as usize,
+        height: t.h as usize,
+        stride: fb.stride,
+        format: fb.format,
+    };
+    // SAFETY: the rectangle lies inside the framebuffer (DeskLayout keeps the window on screen), so every
+    // row the console touches, `x .. x + width` of lines `y .. y + height`, is inside the mapped framebuffer.
+    let Some(mut con) = (unsafe { Console::new(&info) }) else {
+        crate::warn!("desktop", "terminal window {}x{} too small for the console", t.w, t.h);
+        return false;
+    };
+    let mut cbuf = [0u8; 28];
+    let clock = clock_now(&mut cbuf);
+    // SAFETY: single-threaded boot path (see `state`).
+    let back = unsafe { BACK.get() };
+    {
+        let Some(mut c) = Canvas::new(&mut back[..w * h], w, h, w) else { return false };
+        desktop::draw(&mut c, &l, clock);
+    }
+    let full = Rect::new(0, 0, w as i32, h as i32);
+    let t0 = arch::rdtsc();
+    loop {
+        let e = us_since(t0);
+        if e >= 300_000 {
+            break;
+        }
+        let k = u32::from(anim::ease_in_out((e / 300) as u16)) * 256 / 1000;
+        blit_dim(&fb, &back[..w * h], w, full, k);
+    }
+    blit(&fb, &back[..w * h], w, full);
+    con.clear();
+    con.fullscreen_log();
+    log::attach_console(con);
+    s.desk = Some(l);
+    s.clock_min = u32::MAX;
+    crate::info!("desktop", "desktop shown; terminal window {}x{} at ({}, {})", t.w, t.h, t.x, t.y);
+    true
+}
+
+fn clock_now(buf: &mut [u8; 28]) -> &str {
+    match crate::rtc::now() {
+        Some(t) => desktop::clock_text(buf, t.weekday_name(), t.day, t.month_name(), t.hour, t.min),
+        None => "--:--",
+    }
+}
+
+/// Keeps the panel clock current; cheap to call often (redraws only when the minute changes). Called by the
+/// status task, the only caller once the desktop is up.
+pub fn panel_tick() {
+    let s = state();
+    let (Some(l), Some(fb)) = (s.desk, s.fb) else { return };
+    let min = crate::rtc::now().map_or(0, |t| u32::from(t.hour) * 60 + u32::from(t.min));
+    if min == s.clock_min {
+        return;
+    }
+    s.clock_min = min;
+    let mut cbuf = [0u8; 28];
+    let clock = clock_now(&mut cbuf);
+    let (w, h) = (fb.width, fb.height);
+    // SAFETY: after boot only the status task calls this; nothing else uses BACK any more.
+    let back = unsafe { BACK.get() };
+    {
+        let Some(mut c) = Canvas::new(&mut back[..w * h], w, h, w) else { return };
+        desktop::draw_clock(&mut c, &l, clock);
+    }
+    blit(&fb, &back[..w * h], w, l.clock);
+}
+
+/// Like `blit`, with every pixel scaled by `k` / 256 (fade in).
+fn blit_dim(fb: &FbInfo, back: &[u32], w: usize, r: Rect, k: u32) {
+    let r = r.intersect(&Rect::new(0, 0, fb.width as i32, fb.height as i32));
+    let (x, rw) = (r.x as usize, r.w as usize);
+    for y in r.y as usize..r.bottom() as usize {
+        let src = &back[y * w + x..y * w + x + rw];
+        // SAFETY: as in `blit`.
+        let dst = unsafe { core::slice::from_raw_parts_mut((fb.base as *mut u32).add(y * fb.stride + x), rw) };
+        for (d, &p) in dst.iter_mut().zip(src) {
+            let p = crate::gui::canvas::mix256(0, p, k);
+            *d = match fb.format {
+                PixelFormat::Bgr => p,
+                f => f.pack((p >> 16) as u8, (p >> 8) as u8, p as u8),
+            };
+        }
+    }
 }
 
 /// Leaves the animation for the scrolling log (verbose key, recovery mode): everything logged so far is shown.

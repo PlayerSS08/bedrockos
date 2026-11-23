@@ -31,6 +31,7 @@ pub mod bootcount;
 pub mod bootinfo;
 pub mod bootopts;
 pub mod bootscene;
+pub mod desktop;
 pub mod cmdhelp;
 pub mod cpuid;
 pub mod dns;
