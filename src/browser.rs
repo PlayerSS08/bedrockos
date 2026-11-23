@@ -9,9 +9,9 @@ use alloc::format;
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use crate::apps::{clipped, text, Effect, Fonts, BG, SIDEBAR};
-use crate::gui::canvas::{self, rgb, Canvas, Rect};
-use crate::gui::theme::DARK;
+use crate::apps::{clipped, text, Effect, Fonts};
+use crate::gfont::{self, Face};
+use crate::gui::canvas::{self, rgb, Canvas, Color, Rect};
 use crate::keymap::Key;
 
 pub const HOME: &str = "about:home";
@@ -271,6 +271,8 @@ pub fn parse(html: &str, base: &str) -> Page {
                     skip = Some(name.clone());
                 }
             }
+            // Site menus come first on most pages; like reader mode, they are left out (when they end).
+            "nav" if !closing && rest.contains("</nav") => skip = Some(name.clone()),
             "title" => in_title = !closing,
             "h1" | "h2" | "h3" | "h4" => b.end_block(if closing { Kind::Para } else { Kind::Heading }),
             "li" | "dt" if !closing => {
@@ -347,23 +349,151 @@ pub fn home_page() -> Page {
         <p>The BedrockOS web browser. Type an address or words to search for in the bar above (Ctrl+L), then Enter.</p>\
         <p>Pages are shown as text: headings, paragraphs and links. Click a link, or press Tab to pick one and Enter to open it. Backspace goes back.</p>\
         <h2>Try these</h2>\
-        <ul><li><a href=\"http://info.cern.ch/hypertext/WWW/TheProject.html\">The first web page (CERN, 1991)</a></li>\
-        <li><a href=\"http://frogfind.com/\">FrogFind: the web made simple for old browsers</a></li>\
-        <li><a href=\"https://en.wikipedia.org/wiki/Minecraft\">Wikipedia: Minecraft</a></li>\
-        <li><a href=\"https://lite.duckduckgo.com/lite/?q=bedrock\">Search: bedrock</a></li>\
+        <ul><li><a href=\"https://en.wikipedia.org/wiki/Minecraft\">Wikipedia</a></li>\
+        <li><a href=\"https://lite.duckduckgo.com/lite/?q=minecraft\">DuckDuckGo</a></li>\
         <li><a href=\"https://news.ycombinator.com/\">Hacker News</a></li>\
-        <li><a href=\"https://www.rust-lang.org/\">The Rust language</a></li></ul>\
+        <li><a href=\"http://info.cern.ch/hypertext/WWW/TheProject.html\">CERN 1991</a></li>\
+        <li><a href=\"http://frogfind.com/\">FrogFind</a></li>\
+        <li><a href=\"https://www.rust-lang.org/\">Rust</a></li></ul>\
         <h2>How pages arrive</h2>\
         <p>http:// pages are fetched by BedrockOS itself. https:// pages need encryption (TLS), which BedrockOS does not have: \
         they are fetched for it by the helper on the laptop (python tools/bedrock-host.py), which also does Wi-Fi.</p>";
     parse(html, HOME)
 }
 
-/// One laid-out line: x offset per word and where it is drawn.
+/// One laid-out word: where it goes on its line.
 struct Word<'a> {
     x: i32,
     text: &'a str,
     link: Option<usize>,
+}
+
+/// One laid-out line of the page.
+struct Row<'a> {
+    kind: Kind,
+    words: Vec<Word<'a>>,
+    h: i32,
+}
+
+// Light colours, like the browsers people know.
+const PAGE: Color = rgb(255, 255, 255);
+const INK: Color = rgb(32, 33, 36);
+const INK_DIM: Color = rgb(95, 99, 104);
+const LINK: Color = rgb(26, 13, 171);
+const LINK_SEL: Color = rgb(232, 240, 254);
+const STRIP: Color = rgb(222, 225, 230);
+const TOOLBAR: Color = rgb(255, 255, 255);
+const OMNI: Color = rgb(241, 243, 244);
+const LINE: Color = rgb(218, 220, 224);
+const BLUE: Color = rgb(26, 115, 232);
+const ICON: Color = rgb(95, 99, 104);
+const ICON_OFF: Color = rgb(189, 193, 198);
+
+/// The bookmarks bar.
+const BOOKMARKS: [(&str, &str); 5] = [
+    ("Wikipedia", "https://en.wikipedia.org/wiki/Minecraft"),
+    ("DuckDuckGo", "https://lite.duckduckgo.com/lite/"),
+    ("Hacker News", "https://news.ycombinator.com/"),
+    ("First web page", "http://info.cern.ch/hypertext/WWW/TheProject.html"),
+    ("Rust", "https://www.rust-lang.org/"),
+];
+
+/// Where each part of the browser window goes.
+#[derive(Clone, Copy, Default)]
+struct Chrome {
+    tab: Rect,
+    tab_close: Rect,
+    new_tab: Rect,
+    toolbar: Rect,
+    back: Rect,
+    fwd: Rect,
+    reload: Rect,
+    home: Rect,
+    omni: Rect,
+    menu: Rect,
+    marks: Rect,
+    page: Rect,
+    scroll: Rect,
+}
+
+fn chrome(body: Rect, f: &Fonts) -> Chrome {
+    let th = f.sans.height as i32;
+    let strip_h = th + 20;
+    let tool_h = th + 24;
+    let marks_h = th + 12;
+    let tab_w = (body.w / 3).clamp(170, 320);
+    let tab = Rect::new(body.x + 10, body.y + 7, tab_w, strip_h - 7);
+    let bs = tool_h - 12;
+    let toolbar = Rect::new(body.x, body.y + strip_h, body.w, tool_h);
+    let by = toolbar.y + 6;
+    let back = Rect::new(body.x + 8, by, bs, bs);
+    let fwd = Rect::new(back.right() + 2, by, bs, bs);
+    let reload = Rect::new(fwd.right() + 2, by, bs, bs);
+    let home = Rect::new(reload.right() + 2, by, bs, bs);
+    let menu = Rect::new(body.right() - 8 - bs, by, bs, bs);
+    let ox = home.right() + 10;
+    let omni = Rect::new(ox, toolbar.y + 6, menu.x - 10 - ox, tool_h - 12);
+    let marks = Rect::new(body.x, toolbar.bottom(), body.w, marks_h);
+    let py = marks.bottom() + 1;
+    let page = Rect::new(body.x, py, body.w - 12, body.bottom() - py);
+    Chrome {
+        tab,
+        tab_close: Rect::new(tab.right() - 28, tab.y + (tab.h - 20) / 2, 20, 20),
+        new_tab: Rect::new(tab.right() + 8, tab.y + (tab.h - 28) / 2, 28, 28),
+        toolbar,
+        back,
+        fwd,
+        reload,
+        home,
+        omni,
+        menu,
+        marks,
+        page,
+        scroll: Rect::new(body.right() - 12, py, 12, page.h),
+    }
+}
+
+/// A round-ended line made of dots (the canvas has no line primitive); for small icons.
+fn seg(c: &mut Canvas, a: (f32, f32), b: (f32, f32), w: f32, col: Color) {
+    let n = ((b.0 - a.0).abs().max((b.1 - a.1).abs()) * 2.0) as i32 + 1;
+    for i in 0..=n {
+        let t = i as f32 / n as f32;
+        c.circle(a.0 + (b.0 - a.0) * t, a.1 + (b.1 - a.1) * t, w / 2.0, col, 1.0);
+    }
+}
+
+fn centre(r: Rect) -> (f32, f32) {
+    (r.x as f32 + r.w as f32 / 2.0, r.y as f32 + r.h as f32 / 2.0)
+}
+
+/// The site part of an address ("en.wikipedia.org") and the rest.
+fn split_url(url: &str) -> (&str, &str) {
+    let rest = url.split_once("://").map_or(url, |(_, r)| r);
+    match rest.find('/') {
+        Some(i) => (&rest[..i], &rest[i..]),
+        None => (rest, ""),
+    }
+}
+
+/// A small coloured square with the first letter of `name`, standing in for a site's icon.
+fn site_icon(c: &mut Canvas, f: &Face, x: i32, y: i32, s: i32, name: &str) {
+    let h = name.bytes().fold(7u32, |a, b| a.wrapping_mul(31).wrapping_add(u32::from(b)));
+    let cols = [rgb(66, 133, 244), rgb(219, 68, 55), rgb(244, 180, 0), rgb(15, 157, 88), rgb(171, 71, 188), rgb(0, 172, 193)];
+    c.round_rect(x as f32, y as f32, s as f32, s as f32, s as f32 * 0.25, cols[(h % 6) as usize], 1.0);
+    let ch = name.get(..1).unwrap_or("?");
+    let up = [ch.as_bytes()[0].to_ascii_uppercase()];
+    let l = core::str::from_utf8(&up).unwrap_or("?");
+    let w = canvas::text_width(f, l, 0);
+    c.text(f, x + (s - w) / 2, y + (s - f.height as i32) / 2, l, rgb(255, 255, 255), 1.0);
+}
+
+/// The Crafting Table tab icon: a little crafting-table block.
+fn table_icon(c: &mut Canvas, x: i32, y: i32, s: i32) {
+    c.fill_rect(Rect::new(x, y, s, s), rgb(150, 104, 58));
+    c.fill_rect(Rect::new(x, y, s, s / 3), rgb(186, 140, 84));
+    c.fill_rect(Rect::new(x, y + s / 3, s, 1), rgb(96, 64, 34));
+    c.fill_rect(Rect::new(x + s / 2, y, 1, s / 3), rgb(96, 64, 34));
+    c.fill_rect(Rect::new(x + s / 4, y + s / 2, s / 2, s / 3), rgb(110, 76, 40));
 }
 
 pub struct Browser {
@@ -372,6 +502,7 @@ pub struct Browser {
     pub editing: bool,
     pub page: Page,
     history: Vec<String>,
+    forward: Vec<String>,
     /// Scroll position in lines and the selected link.
     top: usize,
     sel: Option<usize>,
@@ -379,8 +510,11 @@ pub struct Browser {
     /// A page the kernel should fetch.
     pub pending: Option<String>,
     pub loading: bool,
-    /// Clickable areas from the last drawing.
+    /// Clickable links from the last drawing: area, address, link number.
     hits: Vec<(Rect, usize)>,
+    marks: Vec<(Rect, &'static str)>,
+    ui: Chrome,
+    search_box: Rect,
     rows_shown: usize,
     rows_total: usize,
 }
@@ -393,12 +527,16 @@ impl Default for Browser {
             editing: false,
             page: home_page(),
             history: Vec::new(),
+            forward: Vec::new(),
             top: 0,
             sel: None,
             status: String::new(),
             pending: None,
             loading: false,
             hits: Vec::new(),
+            marks: Vec::new(),
+            ui: Chrome::default(),
+            search_box: Rect::default(),
             rows_shown: 1,
             rows_total: 0,
         }
@@ -410,6 +548,7 @@ impl Browser {
     pub fn go(&mut self, url: &str, remember: bool) {
         if remember && self.url != url {
             self.history.push(self.url.clone());
+            self.forward.clear();
         }
         self.editing = false;
         if url == HOME {
@@ -418,11 +557,12 @@ impl Browser {
             self.top = 0;
             self.sel = None;
             self.status.clear();
+            self.loading = false;
             return;
         }
         self.pending = Some(url.to_string());
         self.loading = true;
-        self.status = format!("Loading {url} ...");
+        self.status = format!("Waiting for {}...", split_url(url).0);
     }
 
     /// The kernel's answer for a fetch: the final address and the HTML, or an error.
@@ -432,24 +572,44 @@ impl Browser {
             Ok((final_url, html)) => {
                 self.url = if final_url.is_empty() { url.to_string() } else { final_url };
                 self.page = parse(&html, &self.url);
-                self.top = 0;
-                self.sel = None;
-                self.status = format!("{} links", self.page.links.len());
+                self.status.clear();
             }
             Err(e) => {
                 self.url = url.to_string();
-                self.page = parse(&format!("<h1>Could not open this page</h1><p>{}</p><p>{}</p>", url, e), HOME);
-                self.top = 0;
-                self.sel = None;
-                self.status = String::from("Error");
+                let site = split_url(url).0;
+                self.page = parse(
+                    &format!("<title>{site}</title><h1>This site can't be reached</h1><p>{site} could not be opened.</p><p>{e}</p><ul><li>Check the address</li><li>Check the connection (ping 8.8.8.8 in ChatBox)</li><li>For https:// pages, check the laptop helper is running</li></ul>"),
+                    HOME,
+                );
+                self.status.clear();
             }
         }
+        self.top = 0;
+        self.sel = None;
     }
 
     fn back(&mut self) {
         if let Some(u) = self.history.pop() {
+            self.forward.push(self.url.clone());
             self.go(&u, false);
         }
+    }
+
+    fn fwd(&mut self) {
+        if let Some(u) = self.forward.pop() {
+            self.history.push(self.url.clone());
+            self.go(&u, false);
+        }
+    }
+
+    fn reload(&mut self) {
+        let u = self.url.clone();
+        self.go(&u, false);
+    }
+
+    fn edit_address(&mut self) {
+        self.editing = true;
+        self.input = if self.url == HOME { String::new() } else { self.url.clone() };
     }
 
     fn scroll(&mut self, d: i32) {
@@ -477,16 +637,14 @@ impl Browser {
         }
         let n = self.page.links.len();
         match k {
-            Key::ClearScreen | Key::Ctrl(b'l') | Key::Char(b'/') => {
-                self.editing = true;
-                self.input = if self.url == HOME { String::new() } else { self.url.clone() };
-            }
+            Key::ClearScreen | Key::Ctrl(b'l') | Key::Char(b'/') => self.edit_address(),
             Key::Tab if n > 0 => self.sel = Some(self.sel.map_or(0, |s| (s + 1) % n)),
             Key::Enter => match self.sel.and_then(|s| self.page.links.get(s)).cloned() {
                 Some(u) => self.go(&u, true),
                 None => return Effect::None,
             },
             Key::Backspace | Key::Left => self.back(),
+            Key::Right => self.fwd(),
             Key::Up => self.scroll(-3),
             Key::Down => self.scroll(3),
             Key::PageUp => self.scroll(-(self.rows_shown as i32 - 2).max(1)),
@@ -494,29 +652,36 @@ impl Browser {
             Key::Home => self.top = 0,
             Key::End => self.scroll(i32::MAX / 2),
             Key::Char(b'h') => self.go(HOME, true),
-            Key::Char(b'r') if self.url != HOME => {
-                let u = self.url.clone();
-                self.go(&u, false);
-            }
+            Key::Char(b'r') | Key::Ctrl(b'r') => self.reload(),
             _ => return Effect::None,
         }
         Effect::Redraw
     }
 
-    fn bar(body: Rect) -> Rect {
-        Rect::new(body.x + 12, body.y + 8, body.w - 24, 34)
-    }
-
-    pub fn click(&mut self, body: Rect, x: i32, y: i32) -> Effect {
-        if Self::bar(body).contains(x, y) {
+    pub fn click(&mut self, _body: Rect, x: i32, y: i32) -> Effect {
+        let ui = self.ui;
+        if ui.omni.contains(x, y) || (self.url == HOME && self.search_box.contains(x, y)) {
             if !self.editing {
-                self.editing = true;
-                self.input = if self.url == HOME { String::new() } else { self.url.clone() };
+                self.edit_address();
             }
             return Effect::Redraw;
         }
         self.editing = false;
-        if let Some(&(_, l)) = self.hits.iter().find(|(r, _)| r.contains(x, y)) {
+        if ui.back.contains(x, y) {
+            self.back();
+        } else if ui.fwd.contains(x, y) {
+            self.fwd();
+        } else if ui.reload.contains(x, y) {
+            self.reload();
+        } else if ui.home.contains(x, y) || ui.new_tab.contains(x, y) || ui.tab_close.contains(x, y) {
+            self.go(HOME, true);
+        } else if let Some(&(_, u)) = self.marks.iter().find(|(r, _)| r.contains(x, y)) {
+            self.go(u, true);
+        } else if ui.scroll.contains(x, y) && self.rows_total > self.rows_shown {
+            // A click on the scroll bar jumps there.
+            let frac = (y - ui.scroll.y).clamp(0, ui.scroll.h) as usize;
+            self.top = (self.rows_total - self.rows_shown) * frac / ui.scroll.h.max(1) as usize;
+        } else if let Some(&(_, l)) = self.hits.iter().find(|(r, _)| r.contains(x, y)) {
             if let Some(u) = self.page.links.get(l).cloned() {
                 self.sel = Some(l);
                 self.go(&u, true);
@@ -526,119 +691,339 @@ impl Browser {
     }
 
     pub fn draw(&mut self, c: &mut Canvas, body: Rect, f: &Fonts) {
-        c.fill_rect(body, BG);
-        // Address bar.
-        c.fill_rect(Rect::new(body.x, body.y, body.w, 50), SIDEBAR);
-        let bar = Self::bar(body);
-        let edge = if self.editing { DARK.accent } else { rgb(60, 70, 100) };
-        c.round_rect(bar.x as f32, bar.y as f32, bar.w as f32, bar.h as f32, 8.0, rgb(14, 17, 28), 1.0);
-        c.round_rect_stroke(bar.x as f32 + 0.5, bar.y as f32 + 0.5, bar.w as f32 - 1.0, bar.h as f32 - 1.0, 8.0, 1.0, edge, 1.0);
-        let ty = bar.y + (bar.h - f.sans.height as i32) / 2;
-        clipped(c, bar.inflate(-10), |c| {
-            if self.editing {
-                let s = format!("{}_", self.input);
-                let w = canvas::text_width(f.sans, &s, 0);
-                let x = (bar.x + 12).min(bar.right() - 12 - w);
-                text(c, f.sans, x, ty, &s, DARK.text);
-                if self.input.is_empty() {
-                    text(c, f.sans, bar.x + 24, ty, "Type an address or words to search for", DARK.text_dim);
-                }
-            } else {
-                let lock = if self.url.starts_with("https://") { "[secure] " } else { "" };
-                let shown = if self.url == HOME { String::from("Crafting Table start page") } else { format!("{lock}{}", self.url) };
-                text(c, f.sans, bar.x + 12, ty, &shown, DARK.text_dim);
-            }
-        });
-        // Page.
-        let area = Rect::new(body.x + 24, body.y + 60, body.w - 48, body.h - 60 - 34);
-        let rh = f.sans.height as i32 + 8;
-        let space = canvas::text_width(f.sans, " ", 0).max(4);
-        let mut rows: Vec<(Kind, Vec<Word>)> = Vec::new();
-        let first_heading: String = match self.page.blocks.first() {
-            Some(b) if b.kind == Kind::Heading => b.words.iter().map(|w| w.0.as_str()).collect::<Vec<_>>().join(" "),
-            _ => String::new(),
-        };
-        if !self.page.title.is_empty() && first_heading != self.page.title {
-            rows.push((Kind::Heading, alloc::vec![Word { x: 0, text: self.page.title.as_str(), link: None }]));
-            rows.push((Kind::Para, Vec::new()));
+        let ui = chrome(body, f);
+        self.ui = ui;
+        self.draw_frame(c, body, f, &ui);
+        c.fill_rect(ui.page, PAGE);
+        if self.url == HOME {
+            self.draw_start(c, f, &ui);
+        } else {
+            self.draw_page(c, f, &ui);
         }
+        // Status bubble, bottom left (where the page is loading from, or the chosen link's address).
+        let bubble = if self.loading {
+            Some(self.status.clone())
+        } else {
+            self.sel.and_then(|s| self.page.links.get(s)).cloned()
+        };
+        if let Some(s) = bubble {
+            let w = (canvas::text_width(f.sans, &s, 0) + 20).min(ui.page.w * 2 / 3);
+            let h = f.sans.height as i32 + 10;
+            let r = Rect::new(ui.page.x, ui.page.bottom() - h, w, h);
+            c.fill_rect(r, OMNI);
+            c.fill_rect(Rect::new(r.x, r.y, r.w, 1), LINE);
+            c.fill_rect(Rect::new(r.right() - 1, r.y, 1, r.h), LINE);
+            clipped(c, r.inflate(-4), |c| text(c, f.sans, r.x + 10, r.y + 5, &s, INK_DIM));
+        }
+    }
+
+    /// Tab strip, toolbar (buttons and address bar) and bookmarks bar.
+    fn draw_frame(&mut self, c: &mut Canvas, body: Rect, f: &Fonts, ui: &Chrome) {
+        let th = f.sans.height as i32;
+        c.fill_rect(Rect::new(body.x, body.y, body.w, ui.toolbar.y - body.y), STRIP);
+        // The tab, joined to the toolbar.
+        let t = ui.tab;
+        c.round_rect(t.x as f32, t.y as f32, t.w as f32, (t.h + 12) as f32, 9.0, TOOLBAR, 1.0);
+        let ix = t.x + 12;
+        let is = th.min(18);
+        if self.loading {
+            let (cx, cy) = (ix as f32 + is as f32 / 2.0, (t.y + t.h / 2) as f32);
+            c.arc(cx, cy, is as f32 / 2.0 - 1.0, 2.0, 1.0, LINE, 1.0);
+            c.arc(cx, cy, is as f32 / 2.0 - 1.0, 2.0, 0.3, BLUE, 1.0);
+        } else {
+            table_icon(c, ix, t.y + (t.h - is) / 2, is);
+        }
+        let title: String = if self.loading {
+            String::from("Loading...")
+        } else if self.url == HOME {
+            String::from("New Tab")
+        } else if !self.page.title.is_empty() {
+            self.page.title.clone()
+        } else {
+            String::from(split_url(&self.url).0)
+        };
+        let tr = Rect::new(ix + is + 8, t.y, t.w - is - 52, t.h);
+        clipped(c, tr, |c| text(c, f.sans, tr.x, t.y + (t.h - th) / 2, &title, INK));
+        let (cx, cy) = centre(ui.tab_close);
+        seg(c, (cx - 4.0, cy - 4.0), (cx + 4.0, cy + 4.0), 1.6, ICON);
+        seg(c, (cx - 4.0, cy + 4.0), (cx + 4.0, cy - 4.0), 1.6, ICON);
+        let (cx, cy) = centre(ui.new_tab);
+        seg(c, (cx - 6.0, cy), (cx + 6.0, cy), 1.8, ICON);
+        seg(c, (cx, cy - 6.0), (cx, cy + 6.0), 1.8, ICON);
+
+        // Toolbar.
+        c.fill_rect(ui.toolbar, TOOLBAR);
+        let s = ui.back.w as f32 * 0.22;
+        let col = |on: bool| if on { ICON } else { ICON_OFF };
+        let (cx, cy) = centre(ui.back);
+        let k = col(!self.history.is_empty());
+        seg(c, (cx + s, cy), (cx - s, cy), 2.0, k);
+        seg(c, (cx - s, cy), (cx, cy - s), 2.0, k);
+        seg(c, (cx - s, cy), (cx, cy + s), 2.0, k);
+        let (cx, cy) = centre(ui.fwd);
+        let k = col(!self.forward.is_empty());
+        seg(c, (cx - s, cy), (cx + s, cy), 2.0, k);
+        seg(c, (cx + s, cy), (cx, cy - s), 2.0, k);
+        seg(c, (cx + s, cy), (cx, cy + s), 2.0, k);
+        let (cx, cy) = centre(ui.reload);
+        if self.loading {
+            // Stop (an X) while loading, like real browsers.
+            seg(c, (cx - s, cy - s), (cx + s, cy + s), 2.0, ICON);
+            seg(c, (cx - s, cy + s), (cx + s, cy - s), 2.0, ICON);
+        } else {
+            c.arc(cx, cy, s * 1.05, 2.0, 0.78, ICON, 1.0);
+            seg(c, (cx, cy - s * 1.05), (cx - s * 0.6, cy - s * 1.6), 2.0, ICON);
+            seg(c, (cx, cy - s * 1.05), (cx - s * 0.6, cy - s * 0.5), 2.0, ICON);
+        }
+        let (cx, cy) = centre(ui.home);
+        seg(c, (cx - s * 1.2, cy), (cx, cy - s * 1.15), 2.0, ICON);
+        seg(c, (cx, cy - s * 1.15), (cx + s * 1.2, cy), 2.0, ICON);
+        seg(c, (cx - s * 0.8, cy - s * 0.3), (cx - s * 0.8, cy + s), 2.0, ICON);
+        seg(c, (cx + s * 0.8, cy - s * 0.3), (cx + s * 0.8, cy + s), 2.0, ICON);
+        seg(c, (cx - s * 0.8, cy + s), (cx + s * 0.8, cy + s), 2.0, ICON);
+        let (cx, cy) = centre(ui.menu);
+        for d in [-s * 0.9, 0.0, s * 0.9] {
+            c.circle(cx, cy + d, 2.0, ICON, 1.0);
+        }
+        // Address bar.
+        let o = ui.omni;
+        let rr = o.h as f32 / 2.0;
+        if self.editing {
+            c.round_rect(o.x as f32, o.y as f32, o.w as f32, o.h as f32, rr, TOOLBAR, 1.0);
+            c.round_rect_stroke(o.x as f32 + 1.0, o.y as f32 + 1.0, o.w as f32 - 2.0, o.h as f32 - 2.0, rr, 2.0, BLUE, 1.0);
+        } else {
+            c.round_rect(o.x as f32, o.y as f32, o.w as f32, o.h as f32, rr, OMNI, 1.0);
+        }
+        let ty = o.y + (o.h - th) / 2;
+        let inner = Rect::new(o.x + 12, o.y, o.w - 24, o.h);
+        let secure = self.url.starts_with("https://");
+        clipped(c, inner, |c| {
+            let mut x = o.x + 16;
+            if self.editing {
+                let w = canvas::text_width(f.sans, &self.input, 0);
+                let sx = x.min(inner.right() - 6 - w);
+                text(c, f.sans, sx, ty, &self.input, INK);
+                c.fill_rect(Rect::new(sx + w + 1, o.y + 8, 2, o.h - 16), BLUE);
+                if self.input.is_empty() {
+                    text(c, f.sans, x + 6, ty, "Search DuckDuckGo or type a URL", INK_DIM);
+                }
+                return;
+            }
+            if self.url == HOME {
+                text(c, f.sans, x, ty, "Search DuckDuckGo or type a URL", INK_DIM);
+                return;
+            }
+            let cy = (o.y + o.h / 2) as f32;
+            if secure {
+                // Padlock.
+                let lx = x as f32;
+                seg(c, (lx + 3.0, cy - 1.0), (lx + 3.0, cy - 5.0), 1.6, ICON);
+                seg(c, (lx + 3.0, cy - 6.0), (lx + 9.0, cy - 6.0), 1.6, ICON);
+                seg(c, (lx + 9.0, cy - 1.0), (lx + 9.0, cy - 5.0), 1.6, ICON);
+                c.round_rect(lx, cy - 2.0, 12.0, 9.0, 2.0, ICON, 1.0);
+                x += 22;
+            } else {
+                c.circle(x as f32 + 7.0, cy, 7.0, ICON, 1.0);
+                c.circle(x as f32 + 7.0, cy, 5.4, OMNI, 1.0);
+                c.fill_rect(Rect::new(x + 6, cy as i32 - 1, 2, 5), ICON);
+                c.fill_rect(Rect::new(x + 6, cy as i32 - 4, 2, 2), ICON);
+                x += 20;
+                x += c.text(f.sans, x, ty, "Not secure", INK_DIM, 1.0);
+                c.fill_rect(Rect::new(x + 8, o.y + 9, 1, o.h - 18), INK_DIM);
+                x += 18;
+            }
+            let (site, rest) = split_url(&self.url);
+            x += c.text(f.sans, x, ty, site, INK, 1.0);
+            text(c, f.sans, x, ty, rest, INK_DIM);
+        });
+        // Loading bar under the toolbar.
+        if self.loading {
+            c.fill_rect(Rect::new(body.x, ui.toolbar.bottom() - 3, body.w * 2 / 5, 3), BLUE);
+        }
+        // Bookmarks bar.
+        c.fill_rect(ui.marks, TOOLBAR);
+        c.fill_rect(Rect::new(body.x, ui.marks.bottom(), body.w, 1), LINE);
+        self.marks.clear();
+        let mut x = ui.marks.x + 12;
+        let is = th - 2;
+        for (name, url) in BOOKMARKS {
+            let w = canvas::text_width(f.sans, name, 0) + is + 22;
+            if x + w > ui.marks.right() - 8 {
+                break;
+            }
+            let r = Rect::new(x, ui.marks.y + 3, w, ui.marks.h - 6);
+            site_icon(c, f.sans, x + 8, r.y + (r.h - is) / 2, is, name);
+            text(c, f.sans, x + is + 14, ui.marks.y + (ui.marks.h - th) / 2, name, INK);
+            self.marks.push((r, url));
+            x += w + 4;
+        }
+    }
+
+    /// The start page: a big title, a search box and shortcut tiles, like a new tab page.
+    fn draw_start(&mut self, c: &mut Canvas, f: &Fonts, ui: &Chrome) {
+        let p = ui.page;
+        let big = &gfont::SANS_24;
+        self.hits.clear();
+        self.rows_total = 0;
+        let title = "Crafting Table";
+        let tw = canvas::text_width(big, title, 0);
+        let mut y = p.y + (p.h / 7).max(24);
+        let is = big.height as i32 + 8;
+        let tx = p.x + (p.w - tw - is - 14) / 2;
+        table_icon(c, tx, y - 4, is);
+        c.text(big, tx + is + 14, y, title, INK, 1.0);
+        c.text(big, tx + is + 15, y, title, INK, 1.0);
+        y += big.height as i32 + 26;
+        let sw = (p.w - 80).min(560);
+        let sb = Rect::new(p.x + (p.w - sw) / 2, y, sw, f.sans.height as i32 + 24);
+        self.search_box = sb;
+        let rr = sb.h as f32 / 2.0;
+        c.shadow(sb.x as f32, sb.y as f32 + 1.0, sb.w as f32, sb.h as f32, rr, 6.0, 0, 0.18);
+        c.round_rect(sb.x as f32, sb.y as f32, sb.w as f32, sb.h as f32, rr, PAGE, 1.0);
+        c.round_rect_stroke(sb.x as f32 + 0.5, sb.y as f32 + 0.5, sb.w as f32 - 1.0, sb.h as f32 - 1.0, rr, 1.0, LINE, 1.0);
+        let (gx, gy) = (sb.x as f32 + 22.0, (sb.y + sb.h / 2) as f32 - 1.0);
+        c.circle(gx, gy, 6.5, ICON, 1.0);
+        c.circle(gx, gy, 4.8, PAGE, 1.0);
+        seg(c, (gx + 4.5, gy + 4.5), (gx + 8.5, gy + 8.5), 2.2, ICON);
+        text(c, f.sans, sb.x + 42, sb.y + (sb.h - f.sans.height as i32) / 2, "Search DuckDuckGo or type a URL", INK_DIM);
+        y = sb.bottom() + 34;
+        // Shortcut tiles: the start page's links.
+        let n = self.page.links.len();
+        let tile = (f.sans.height as i32 * 7).clamp(110, 176);
+        let per_row = ((p.w - 40) / (tile + 16)).clamp(1, 6) as usize;
+        let rows = n.div_ceil(per_row);
+        for row in 0..rows {
+            let k = per_row.min(n - row * per_row);
+            let rw = k as i32 * (tile + 16) - 16;
+            for col in 0..k {
+                let i = row * per_row + col;
+                let r = Rect::new(p.x + (p.w - rw) / 2 + col as i32 * (tile + 16), y + row as i32 * (tile + 16), tile, tile);
+                let label: Vec<&str> = self.page.blocks.iter().flat_map(|b| b.words.iter()).filter(|w| w.1 == Some(i)).map(|w| w.0.as_str()).collect();
+                let label = label.join(" ");
+                let label = label.split(':').next().unwrap_or("").split('(').next().unwrap_or("").trim();
+                let sel = self.sel == Some(i);
+                c.round_rect(r.x as f32, r.y as f32, r.w as f32, r.h as f32, 12.0, if sel { LINK_SEL } else { OMNI }, 1.0);
+                if sel {
+                    c.round_rect_stroke(r.x as f32 + 1.0, r.y as f32 + 1.0, r.w as f32 - 2.0, r.h as f32 - 2.0, 12.0, 2.0, BLUE, 1.0);
+                }
+                let s = tile * 2 / 5;
+                site_icon(c, f.sans, r.x + (r.w - s) / 2, r.y + tile / 6, s, label);
+                let lw = canvas::text_width(f.sans, label, 0);
+                let lr = Rect::new(r.x + 6, r.bottom() - f.sans.height as i32 - 12, r.w - 12, f.sans.height as i32 + 4);
+                clipped(c, lr, |c| text(c, f.sans, r.x + ((r.w - lw) / 2).max(6), lr.y, label, INK));
+                self.hits.push((r, i));
+            }
+        }
+        y += rows as i32 * (tile + 16) + 14;
+        let note = "Pages are shown as text. https:// pages come through the laptop helper.";
+        let nw = canvas::text_width(f.sans, note, 0);
+        clipped(c, p, |c| text(c, f.sans, p.x + (p.w - nw) / 2, y, note, INK_DIM));
+    }
+
+    /// A web page: headings, paragraphs, lists and links on white, with a scroll bar.
+    fn draw_page(&mut self, c: &mut Canvas, f: &Fonts, ui: &Chrome) {
+        let p = ui.page;
+        let hf = &gfont::SANS_24;
+        let margin = ((p.w - 900) / 2).max(32);
+        let area = Rect::new(p.x + margin, p.y + 18, p.w - 2 * margin, p.h - 18);
+        let body_h = f.sans.height as i32 + 8;
+        let space = canvas::text_width(f.sans, " ", 0).max(4);
+        let mut rows: Vec<Row> = Vec::new();
         for blk in &self.page.blocks {
-            let indent = if blk.kind == Kind::Item { 22 } else { 0 };
+            let (face, h) = match blk.kind {
+                Kind::Heading => (hf, hf.height as i32 + 14),
+                Kind::Pre => (f.mono, f.mono.height as i32 + 4),
+                _ => (f.sans, body_h),
+            };
+            let indent = if blk.kind == Kind::Item { 26 } else { 0 };
             let mut line: Vec<Word> = Vec::new();
             let mut x = indent;
             for (w, link) in &blk.words {
-                let ww = canvas::text_width(f.sans, w, 0);
+                let ww = canvas::text_width(face, w, 0);
                 if x > indent && x + ww > area.w {
-                    rows.push((blk.kind, core::mem::take(&mut line)));
+                    rows.push(Row { kind: blk.kind, words: core::mem::take(&mut line), h });
                     x = indent;
                 }
                 line.push(Word { x, text: w.as_str(), link: *link });
                 x += ww + space;
             }
             if !line.is_empty() {
-                rows.push((blk.kind, line));
+                rows.push(Row { kind: blk.kind, words: line, h });
             }
             if matches!(blk.kind, Kind::Para | Kind::Heading) {
-                rows.push((Kind::Para, Vec::new()));
+                rows.push(Row { kind: Kind::Para, words: Vec::new(), h: body_h / 2 });
             }
         }
         self.rows_total = rows.len();
-        self.rows_shown = (area.h / rh).max(1) as usize;
+        self.rows_shown = (area.h / body_h).max(1) as usize;
         self.top = self.top.min(self.rows_total.saturating_sub(self.rows_shown));
-        // Keep the selected link in view.
         if let Some(s) = self.sel {
-            if let Some(i) = rows.iter().position(|(_, ws)| ws.iter().any(|w| w.link == Some(s))) {
+            if let Some(i) = rows.iter().position(|r| r.words.iter().any(|w| w.link == Some(s))) {
                 if i < self.top || i >= self.top + self.rows_shown {
                     self.top = i.saturating_sub(2).min(self.rows_total.saturating_sub(self.rows_shown));
                 }
             }
         }
-        self.hits.clear();
-        let mut hits = Vec::new();
         let (top, sel) = (self.top, self.sel);
-        clipped(c, area, |c| {
-            for (i, (kind, ws)) in rows.iter().enumerate().skip(top).take(self.rows_shown + 1) {
-                let y = area.y + (i - top) as i32 * rh;
-                if *kind == Kind::Item {
-                    c.circle((area.x + 8) as f32, (y + rh / 2 - 3) as f32, 3.0, DARK.text_dim, 1.0);
+        let mut hits = Vec::new();
+        clipped(c, Rect::new(p.x, p.y, p.w, p.h), |c| {
+            let mut y = area.y;
+            for row in rows.iter().skip(top) {
+                if y > area.bottom() {
+                    break;
                 }
-                for w in ws {
+                let face = match row.kind {
+                    Kind::Heading => hf,
+                    Kind::Pre => f.mono,
+                    _ => f.sans,
+                };
+                if row.kind == Kind::Pre {
+                    c.fill_rect(Rect::new(area.x - 8, y, area.w + 16, row.h), rgb(246, 248, 250));
+                }
+                if row.kind == Kind::Item && row.words.first().is_some_and(|w| w.x == 26) {
+                    c.circle((area.x + 10) as f32, (y + row.h / 2 - 2) as f32, 2.8, INK, 1.0);
+                }
+                for (wi, w) in row.words.iter().enumerate() {
                     let x = area.x + w.x;
-                    let ww = canvas::text_width(f.sans, w.text, 0);
-                    let col = match (w.link, kind) {
-                        (Some(l), _) if Some(l) == sel => {
-                            c.round_rect((x - 3) as f32, (y - 1) as f32, (ww + 6) as f32, (rh - 4) as f32, 4.0, rgb(48, 64, 104), 1.0);
-                            rgb(170, 210, 255)
-                        }
-                        (Some(_), _) => rgb(110, 176, 255),
-                        (None, Kind::Heading) => DARK.accent,
-                        (None, Kind::Pre) => rgb(200, 210, 190),
-                        _ => DARK.text,
+                    let tw = canvas::text_width(face, w.text, 0);
+                    // A link's words share one underline: reach over the gap to the next word of the same link.
+                    let ww = match row.words.get(wi + 1) {
+                        Some(n) if w.link.is_some() && n.link == w.link => n.x - w.x,
+                        _ => tw,
                     };
-                    let face = if *kind == Kind::Pre { f.mono } else { f.sans };
+                    let col = match (w.link, row.kind) {
+                        (Some(l), _) if Some(l) == sel => {
+                            c.round_rect((x - 3) as f32, (y - 1) as f32, (ww + 6) as f32, (face.height + 4) as f32, 3.0, LINK_SEL, 1.0);
+                            c.round_rect_stroke((x - 3) as f32, (y - 1) as f32, (ww + 6) as f32, (face.height + 4) as f32, 3.0, 1.5, BLUE, 1.0);
+                            LINK
+                        }
+                        (Some(_), _) => LINK,
+                        (None, Kind::Pre) => rgb(36, 41, 47),
+                        _ => INK,
+                    };
+                    let _ = tw;
                     text(c, face, x, y, w.text, col);
-                    if *kind == Kind::Heading {
+                    if row.kind == Kind::Heading {
                         text(c, face, x + 1, y, w.text, col);
                     }
                     if let Some(l) = w.link {
-                        c.fill_rect(Rect::new(x, y + f.sans.height as i32 + 1, ww, 1), col);
-                        hits.push((Rect::new(x - 2, y - 2, ww + 4 + space, rh), l));
+                        c.fill_rect(Rect::new(x, y + face.height as i32, ww, 1), col);
+                        hits.push((Rect::new(x - 2, y - 2, ww + 4 + space, row.h), l));
                     }
                 }
+                y += row.h;
             }
         });
         self.hits = hits;
-        // Status line.
-        let fy = body.bottom() - 26;
-        c.fill_rect(Rect::new(body.x, fy - 6, body.w, 1), DARK.border);
-        let pct = if self.rows_total > self.rows_shown { (self.top + self.rows_shown).min(self.rows_total) * 100 / self.rows_total } else { 100 };
-        let hint = if self.loading {
-            self.status.clone()
-        } else {
-            format!("{}   {}%   Ctrl+L address   Tab link   Enter open   Backspace back   H home", self.status, pct)
-        };
-        let col = if self.loading { DARK.warn } else { DARK.text_dim };
-        clipped(c, Rect::new(body.x, fy - 4, body.w, 30), |c| text(c, f.sans, body.x + 14, fy, &hint, col));
+        // Scroll bar.
+        let sb = ui.scroll;
+        c.fill_rect(sb, rgb(248, 248, 248));
+        c.fill_rect(Rect::new(sb.x, sb.y, 1, sb.h), rgb(232, 232, 232));
+        if self.rows_total > self.rows_shown {
+            let th = (sb.h as usize * self.rows_shown / self.rows_total).max(30) as i32;
+            let ty = sb.y + ((sb.h - th) as usize * self.top / (self.rows_total - self.rows_shown)) as i32;
+            c.round_rect(sb.x as f32 + 3.0, ty as f32 + 2.0, 6.0, (th - 4) as f32, 3.0, rgb(193, 193, 193), 1.0);
+        }
     }
 }
 
