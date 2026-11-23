@@ -33,6 +33,7 @@ pub mod bootopts;
 pub mod bootscene;
 pub mod desktop;
 pub mod apps;
+pub mod calc;
 pub mod wm;
 pub mod cmdhelp;
 pub mod cpuid;

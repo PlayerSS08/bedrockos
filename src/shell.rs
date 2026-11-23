@@ -3292,6 +3292,187 @@ fn cmd_pi(rest: &str) {
     out!("  Reference Pi     : 3.141592\n");
 }
 
+/// A pseudo-random number (xorshift seeded from the time-stamp counter): fine for `rand`, `uuid`, `fortune`.
+fn rand64() -> u64 {
+    static STATE: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
+    let mut x = STATE.load(core::sync::atomic::Ordering::Relaxed) ^ crate::arch::rdtsc().rotate_left(17) ^ 0x9E37_79B9_7F4A_7C15;
+    x ^= x << 13;
+    x ^= x >> 7;
+    x ^= x << 17;
+    STATE.store(x, core::sync::atomic::Ordering::Relaxed);
+    x
+}
+
+const FORTUNES: &[&str] = &[
+    "Bedrock is the layer nothing digs through. Neither should bugs.",
+    "A program that works on the first try is hiding something.",
+    "Save early, save often (BedrockOS saves for you after every command).",
+    "Simple things should be simple, complex things should be possible. - Alan Kay",
+    "Weeks of coding can save you hours of planning.",
+    "There are two hard problems: cache invalidation, naming things, and off-by-one errors.",
+    "First, solve the problem. Then, write the code. - John Johnson",
+    "The best error message is the one that never shows up.",
+];
+
+fn cmd_extra(cmd: &str, rest: &str) {
+    match cmd {
+        "calc" => match crate::calc::eval(rest) {
+            _ if rest.is_empty() => out!("usage: calc <expression>   e.g. calc (2 + 3) * 4 / 7\n"),
+            Ok(v) => out!("{}\n", crate::calc::format(v)),
+            Err(e) => out!("calc: {}\n", e),
+        },
+        "about" => {
+            out!("BedrockOS {}: a small Rust operating system that boots on UEFI PCs and in VirtualBox.\n", crate::VERSION);
+            out!("Desktop with ChatBox (this shell), Notes, Tasks and Help; networking over the laptop's connection.\n");
+            out!("Based on Aeon 0.11.0. Fonts: Inter and JetBrains Mono (SIL Open Font License 1.1).\n");
+        }
+        "neofetch" => {
+            let s = log::uptime_us() / 1_000_000;
+            let f = mm::frame_stats();
+            let h = mm::heap_stats();
+            let (ip, _, _, _, _) = crate::netstack::get_config();
+            let logo = ["   ______  ", "  /\\     \\ ", " /  \\_____\\", " \\  /     /", "  \\/_____/ ", "           "];
+            let lines = [
+                alloc::format!("BedrockOS {}", crate::VERSION),
+                alloc::format!("kernel   x86_64 UEFI, preemptive, {} tasks", task_count()),
+                alloc::format!("uptime   {:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60),
+                alloc::format!("memory   {} MB free, heap {} KiB used", f.free as u64 * 4 / 1024, h.used / 1024),
+                alloc::format!("network  {} (host connection)", ip),
+                String::from("shell    ChatBox, 100+ commands (`help`)"),
+            ];
+            for (l, t) in logo.iter().zip(lines.iter()) {
+                out!("{}  {}\n", l, t);
+            }
+        }
+        "cmds" => cmd_help(""),
+        "keys" => {
+            out!("Desktop:  click the dock to open apps; drag a title bar to move; _ minimises, x closes; Ctrl+T next window\n");
+            out!("ChatBox:  Tab completes, Ctrl+Up/Down history, Up/Down/PgUp/PgDn scroll, Ctrl+L clear, Ctrl+C cancel\n");
+            out!("          Ctrl+A/E start/end of line, Ctrl+U/K cut before/after, Ctrl+W cut word\n");
+            out!("Notes:    Ctrl+N new note, Ctrl+D delete note, Ctrl+Up/Down switch note, arrows/PgUp/PgDn move\n");
+            out!("Tasks:    type + Enter adds, Down selects, Space done, Delete removes, Esc back to typing\n");
+            out!("Help:     type to search, Up/Down scroll, Esc clears\n");
+        }
+        "uuid" => {
+            let (a, b) = (rand64(), rand64());
+            let b = (b & !0xF000_0000_0000_0000 & 0x3FFF_FFFF_FFFF_FFFF) | 0x8000_0000_0000_0000;
+            let a = (a & !0xF000) | 0x4000;
+            out!("{:08x}-{:04x}-{:04x}-{:04x}-{:012x}\n", a >> 32, (a >> 16) & 0xFFFF, a & 0xFFFF, b >> 48, b & 0xFFFF_FFFF_FFFF);
+        }
+        "rand" => {
+            let max = rest.parse::<u64>().unwrap_or(100).max(1);
+            out!("{}\n", rand64() % max + 1);
+        }
+        "fortune" => out!("{}\n", FORTUNES[(rand64() % FORTUNES.len() as u64) as usize]),
+        "base64" => {
+            let (decode, text) = match rest.strip_prefix("-d ") {
+                Some(t) => (true, t.trim()),
+                None => (false, rest),
+            };
+            if text.is_empty() {
+                out!("usage: base64 <text>   or   base64 -d <base64>\n");
+            } else if decode {
+                match base64_decode(text) {
+                    Some(b) => out!("{}\n", String::from_utf8_lossy(&b)),
+                    None => out!("base64: not valid base64\n"),
+                }
+            } else {
+                out!("{}\n", base64_encode(text.as_bytes()));
+            }
+        }
+        "bench" => {
+            let data = alloc::vec![0x5Au8; 1 << 20];
+            let t0 = log::uptime_us();
+            let mut d = [0u8; 32];
+            for _ in 0..4 {
+                d = crate::sha256::digest(&data);
+            }
+            let us = (log::uptime_us() - t0).max(1);
+            let t1 = log::uptime_us();
+            let mut x = 0u64;
+            for i in 0..20_000_000u64 {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(i);
+            }
+            let us2 = (log::uptime_us() - t1).max(1);
+            out!("SHA-256: 4 MiB in {} ms ({} MB/s)   [{:02x}{:02x}..]\n", us / 1000, 4_000_000 / us, d[0], d[1]);
+            out!("integer: 20 M multiply-adds in {} ms ({} M/s)   [{}]\n", us2 / 1000, 20_000_000 / us2, x & 0xFF);
+        }
+        "todo-today" => {
+            let tasks = crate::apps::parse_tasks(fs().read(crate::apps::TASKS_FILE).unwrap_or(b""));
+            let open: Vec<_> = tasks.iter().enumerate().filter(|(_, t)| !t.done).collect();
+            if open.is_empty() {
+                out!("nothing left to do today\n");
+            }
+            for (i, t) in open {
+                out!("{:>3}. {}\n", i + 1, t.text);
+            }
+        }
+        _ => {}
+    }
+}
+
+const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+fn base64_encode(data: &[u8]) -> String {
+    let mut o = String::new();
+    for c in data.chunks(3) {
+        let n = (u32::from(c[0]) << 16) | (u32::from(*c.get(1).unwrap_or(&0)) << 8) | u32::from(*c.get(2).unwrap_or(&0));
+        for k in 0..4 {
+            if k <= c.len() {
+                o.push(B64[(n >> (18 - 6 * k) & 63) as usize] as char);
+            } else {
+                o.push('=');
+            }
+        }
+    }
+    o
+}
+
+fn base64_decode(s: &str) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let (mut acc, mut bits) = (0u32, 0);
+    for b in s.bytes().filter(|&b| b != b'=') {
+        let v = B64.iter().position(|&c| c == b)? as u32;
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
+/// `nettest`: link, address, gateway, DNS and an HTTP fetch, as a pass/fail table.
+fn cmd_nettest() {
+    let mut pass = 0;
+    let mut row = |name: &str, ok: bool, detail: &str| {
+        out!("  {:<10} {}  {}\n", name, if ok { "PASS" } else { "FAIL" }, detail);
+        if ok {
+            pass += 1;
+        }
+    };
+    out!("Host connection (laptop Wi-Fi) test:\n");
+    let link = crate::netdev::link_up();
+    row("link", link, if link { "network card is up" } else { "no network link" });
+    let (ip, _, gw, dns, dhcp) = crate::netstack::get_config();
+    let has_ip = ip.as_u32() != 0;
+    row("address", has_ip, &alloc::format!("{} ({})", ip, if dhcp { "DHCP" } else { "static" }));
+    let p = if has_ip { crate::netstack::ping(gw, 1, 1000) } else { crate::netstack::PingStats { sent: 0, received: 0, min_us: 0, max_us: 0, avg_us: 0 } };
+    row("gateway", p.received > 0, &alloc::format!("ping {} {}", gw, if p.received > 0 { "answered" } else { "no answer" }));
+    let r = if has_ip { crate::netstack::dns_resolve("example.com") } else { Err(String::from("no address")) };
+    row("dns", r.is_ok(), &match &r {
+        Ok(a) => alloc::format!("example.com is {} (server {})", a, dns),
+        Err(e) => e.clone(),
+    });
+    let h = if r.is_ok() { crate::netstack::http_fetch("http://example.com/", 64 * 1024, &mut |_, _| {}) } else { Err(String::from("skipped")) };
+    row("http", h.as_ref().is_ok_and(|x| x.status == 200), &match &h {
+        Ok(x) => alloc::format!("GET http://example.com/ -> {} ({} bytes)", x.status, x.body.len()),
+        Err(e) => e.clone(),
+    });
+    out!("{} of 5 passed\n", pass);
+}
+
 /// `task add <text>`, `task list`, `task done <n>`, `task rm <n>`: the same list as the Tasks app.
 fn cmd_task(rest: &str) {
     use crate::apps::{parse_tasks, tasks_text, Task, TASKS_FILE};
@@ -3478,6 +3659,8 @@ fn run_plain(line: &str, hist: &History) {
             power::shutdown()
         }
         "task" => cmd_task(rest),
+        "nettest" => cmd_nettest(),
+        "calc" | "about" | "neofetch" | "cmds" | "keys" | "uuid" | "rand" | "fortune" | "base64" | "bench" | "todo-today" => cmd_extra(cmd, rest),
         "net" => {
             out!("Host connection (laptop Wi-Fi): the VM's network card, through VirtualBox NAT or Bridged.\n");
             out!("The laptop chooses the Wi-Fi network in this mode. OS Wi-Fi: no supported chip yet (milestone 8).\n");
