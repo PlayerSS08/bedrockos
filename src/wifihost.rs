@@ -1,4 +1,4 @@
-//! Host-assisted Wi-Fi ("Wi-Fi through the host").
+﻿//! Host-assisted Wi-Fi ("Wi-Fi through the host").
 //!
 //! When BedrockOS runs in a virtual machine it has no Wi-Fi radio of its own: like every VM it reaches the network
 //! through the host. This module lets BedrockOS still choose *which* Wi-Fi network the host joins. A small helper on
@@ -264,7 +264,7 @@ pub mod link {
 
     fn scan_inner(out: &mut [Net; MAX_NETS]) -> Result<usize, Msg> {
         if !hello_inner() {
-            return Err(Msg::new(b"no Wi-Fi helper: start BedrockOS with Run BedrockOS.bat (works in the VM only)"));
+            return Err(Msg::new(b"no Wi-Fi driver yet (milestone 8); online via the laptop connection: try ip, ping, curl"));
         }
         if !send(&[b"SCAN"]) {
             return Err(Msg::new(b"could not talk to the Wi-Fi helper"));
@@ -297,7 +297,7 @@ pub mod link {
 
     fn connect_inner(ssid: &str, password: &[u8]) -> Result<Msg, Msg> {
         if !hello_inner() {
-            return Err(Msg::new(b"no Wi-Fi helper: start BedrockOS with Run BedrockOS.bat (works in the VM only)"));
+            return Err(Msg::new(b"no Wi-Fi driver yet (milestone 8); online via the laptop connection: try ip, ping, curl"));
         }
         if !send(&[b"CONNECT", ssid.as_bytes(), password]) {
             return Err(Msg::new(b"could not talk to the Wi-Fi helper"));

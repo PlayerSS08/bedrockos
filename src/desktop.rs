@@ -172,8 +172,32 @@ pub fn draw(c: &mut Canvas, l: &DeskLayout, clock: &str) {
 
 /// Wallpaper and the top panel with its clock and message, inside the current clip.
 pub fn draw_base(c: &mut Canvas, l: &DeskLayout, clock: &str, msg: &str) {
+    draw_backdrop(c, l);
+    draw_panel_text(c, l, clock, msg);
+}
+
+/// Wallpaper and the empty panel (no clock or message): it never changes, so the kernel draws it once and
+/// copies it, which keeps redraws cheap.
+pub fn draw_backdrop(c: &mut Canvas, l: &DeskLayout) {
     wallpaper(c, l);
-    panel(c, l, clock, msg);
+    panel(c, l);
+}
+
+/// The clock and message text of the panel, drawn over [`draw_backdrop`].
+pub fn draw_panel_text(c: &mut Canvas, l: &DeskLayout, clock: &str, msg: &str) {
+    if l.panel.intersect(&c.clip()).is_empty() {
+        return;
+    }
+    let f = face(l.big());
+    let ty = l.panel.y + (l.panel.h - f.height as i32) / 2;
+    let r = l.clock;
+    let tw = canvas::text_width(f, clock, 0);
+    c.text(f, r.right() - tw - 8, ty, clock, DARK.text, 1.0);
+    if !msg.is_empty() {
+        let m = l.message;
+        let tw = canvas::text_width(f, msg, 0);
+        c.text(f, m.x + (m.w - tw) / 2, ty, msg, DARK.warn, 1.0);
+    }
 }
 
 /// The dock, with a dot under every app whose window is open.
@@ -275,7 +299,7 @@ fn wallpaper(c: &mut Canvas, l: &DeskLayout) {
     c.glow(w * 0.85, h * 0.2, h * 0.8, DARK.accent, 0.18);
 }
 
-fn panel(c: &mut Canvas, l: &DeskLayout, clock: &str, msg: &str) {
+fn panel(c: &mut Canvas, l: &DeskLayout) {
     let p = l.panel;
     if p.intersect(&c.clip()).is_empty() {
         return;
@@ -290,14 +314,6 @@ fn panel(c: &mut Canvas, l: &DeskLayout, clock: &str, msg: &str) {
     c.circle(mx, my, r, DARK.accent, 1.0);
     c.circle(mx, my, r * 0.45, DARK.accent_2, 1.0);
     c.text(f, (mx + r) as i32 + 10, ty, "BedrockOS", DARK.text, 1.0);
-    let r = l.clock;
-    let tw = canvas::text_width(f, clock, 0);
-    c.text(f, r.right() - tw - 8, ty, clock, DARK.text, 1.0);
-    if !msg.is_empty() {
-        let m = l.message;
-        let tw = canvas::text_width(f, msg, 0);
-        c.text(f, m.x + (m.w - tw) / 2, ty, msg, DARK.warn, 1.0);
-    }
 }
 
 /// Corner radius of the window: small (not the large rounded Mac look).

@@ -232,6 +232,8 @@ pub fn finish() {
 
 /// The console's own pixels while the desktop runs (`term.w` pixels per row).
 static TERMBUF: Global<[u32; MAX_W * MAX_H]> = Global::new([0; MAX_W * MAX_H]);
+/// The wallpaper and empty panel, drawn once (copying it is much cheaper than drawing the glows again).
+static BACKDROP: Global<[u32; MAX_W * MAX_H]> = Global::new([0; MAX_W * MAX_H]);
 
 struct Desk {
     l: DeskLayout,
@@ -312,6 +314,12 @@ fn enter_desktop() -> bool {
         });
     }
     let full = Rect::new(0, 0, w as i32, h as i32);
+    {
+        // SAFETY: single-threaded boot path; BACKDROP is only read from now on.
+        let bd = unsafe { BACKDROP.get() };
+        let Some(mut c) = Canvas::new(&mut bd[..w * h], w, h, w) else { return false };
+        desktop::draw_backdrop(&mut c, &l);
+    }
     let Some(d) = desk() else { return false };
     compose(d, &fb, full);
     // SAFETY: single-threaded boot path.
@@ -351,7 +359,10 @@ fn compose(d: &mut Desk, fb: &FbInfo, r: Rect) {
     c.set_clip(r);
     let mut cbuf = [0u8; 28];
     let clock = clock_now(&mut cbuf);
-    desktop::draw_base(&mut c, &d.l, clock, &d.msg);
+    // SAFETY: BACKDROP is written once in `enter_desktop` and only read afterwards.
+    let bd = unsafe { core::slice::from_raw_parts(BACKDROP.as_ptr() as *const u32, MAX_W * MAX_H) };
+    c.copy_from(0, 0, w as i32, h as i32, bd, w);
+    desktop::draw_panel_text(&mut c, &d.l, clock, &d.msg);
     let focused = d.wm.focused();
     let f = Fonts::for_screen(d.l.big());
     let order: Vec<usize> = d.wm.order().to_vec();
@@ -418,12 +429,7 @@ fn win_area(d: &Desk, app: usize) -> Rect {
 pub fn desk_tick() {
     arch::without_interrupts(|| {
         let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
-        if let Some((a, b)) = crate::fb::take_dirty() {
-            if d.wm.is_open(CHATBOX) {
-                let t = d.l.term_in(d.wm.rect(CHATBOX));
-                redraw(d, &fb, Rect::new(t.x, t.y + a as i32, t.w, (b - a + 1) as i32));
-            }
-        }
+        console_to_screen(d, &fb);
         if d.msg_at.is_some_and(|t| us_since(t) >= MESSAGE_US) {
             d.msg.clear();
             d.msg_at = None;
@@ -452,6 +458,45 @@ pub fn desk_tick() {
                 let _ = crate::shell::fs().write(TASKS_FILE, &t.to_text());
                 PERSIST.store(true, core::sync::atomic::Ordering::Relaxed);
             }
+        }
+    });
+}
+
+/// Shows what the console drew since last time. When ChatBox is in front nothing covers its text, so the
+/// changed rows are copied straight from TERMBUF (fast); otherwise they are composed with the windows above.
+fn console_to_screen(d: &mut Desk, fb: &FbInfo) {
+    let Some((a, b)) = crate::fb::take_dirty() else { return };
+    if !d.wm.is_open(CHATBOX) {
+        return;
+    }
+    let t = d.l.term_in(d.wm.rect(CHATBOX));
+    let r = Rect::new(t.x, t.y + a as i32, t.w, (b - a + 1) as i32).intersect(&Rect::new(0, 0, fb.width as i32, fb.height as i32));
+    if d.wm.focused() != Some(CHATBOX) {
+        redraw(d, fb, r);
+        return;
+    }
+    let (w, h) = (fb.width, fb.height);
+    // SAFETY: as in `compose`.
+    let back = unsafe { BACK.get() };
+    // SAFETY: TERMBUF holds MAX_W * MAX_H pixels and is only read here.
+    let term = unsafe { core::slice::from_raw_parts(TERMBUF.as_ptr() as *const u32, MAX_W * MAX_H) };
+    if let Some(mut c) = Canvas::new(&mut back[..w * h], w, h, w) {
+        c.set_clip(r);
+        c.copy_from(t.x, t.y, t.w, t.h, term, t.w as usize);
+    }
+    blit(fb, &back[..w * h], w, r);
+    if let Some((x, y)) = state().dp_shown {
+        if !r.intersect(&Rect::new(x, y, pointer::SPRITE_W as i32, pointer::SPRITE_H as i32)).is_empty() {
+            sprite(fb, x, y);
+        }
+    }
+}
+
+/// Shows console output right away (the shell calls this after handling keys, so typing feels immediate).
+pub fn desk_flush() {
+    arch::without_interrupts(|| {
+        if let (Some(d), Some(fb)) = (desk(), state().fb) {
+            console_to_screen(d, &fb);
         }
     });
 }

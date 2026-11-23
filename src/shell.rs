@@ -3866,6 +3866,8 @@ pub extern "C" fn shell_task(_: usize) {
         }
         if idle {
             sched::sleep_ms(10);
+        } else {
+            crate::bootfx::desk_flush();
         }
     }
 }
