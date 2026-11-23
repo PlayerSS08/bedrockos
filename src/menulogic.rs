@@ -6,34 +6,29 @@
 //! - the menu opens with "Boot BedrockOS" highlighted and a countdown of `timeout` seconds;
 //! - arrow keys move the highlight and restart the countdown (a full `timeout` after your last key);
 //! - the countdown keeps running whichever entry is highlighted, so the menu never looks frozen;
-//! - when it ends, the highlighted entry runs if it is safe to start by itself (`Boot`, `Recovery`); on any
-//!   other entry (firmware shell, debug, firmware setup, restart, power off) BedrockOS boots normally instead, so
+//! - when it ends, the highlighted entry runs if it is safe to start by itself (`Boot`, `Recovery`, `SafeMode`); on any
+//!   other entry (firmware setup, restart, power off) BedrockOS boots normally instead, so
 //!   nothing ever restarts, powers off or changes settings without an Enter;
 //! - Enter runs the highlighted entry at once; any other key (Escape, a letter) stops the countdown.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Entry {
     Boot,
-    Wifi,
     Recovery,
-    FirmwareShell,
-    Debug,
+    SafeMode,
     FirmwareSetup,
     Restart,
     PowerOff,
 }
 
-pub const ENTRIES: [Entry; 8] = [Entry::Boot, Entry::Wifi, Entry::Recovery, Entry::FirmwareShell, Entry::Debug, Entry::FirmwareSetup, Entry::Restart, Entry::PowerOff];
+pub const ENTRIES: [Entry; 6] = [Entry::Boot, Entry::Recovery, Entry::SafeMode, Entry::FirmwareSetup, Entry::Restart, Entry::PowerOff];
 
 impl Entry {
-    pub fn label(self, debug_on: bool) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Entry::Boot => "Boot BedrockOS",
-            Entry::Wifi => "Wi-Fi networks",
-            Entry::Recovery => "Recovery mode",
-            Entry::FirmwareShell => "Firmware shell",
-            Entry::Debug if debug_on => "Debug logging: on",
-            Entry::Debug => "Debug logging: off",
+            Entry::Recovery => "Recovery",
+            Entry::SafeMode => "Safe mode (no network)",
             Entry::FirmwareSetup => "Firmware setup",
             Entry::Restart => "Restart",
             Entry::PowerOff => "Power off",
@@ -44,10 +39,8 @@ impl Entry {
     pub fn description(self) -> &'static str {
         match self {
             Entry::Boot => "Start BedrockOS normally.",
-            Entry::Wifi => "Choose the Wi-Fi network to use, through the host.",
-            Entry::Recovery => "Start with messages on screen and no scheduler, for repairs.",
-            Entry::FirmwareShell => "Open the UEFI command shell.",
-            Entry::Debug => "Turn detailed messages during boot on or off.",
+            Entry::Recovery => "Messages on screen, no scheduler, a plain shell: for repairs.",
+            Entry::SafeMode => "Start the desktop without any network or Wi-Fi drivers.",
             Entry::FirmwareSetup => "Restart into the computer's firmware settings.",
             Entry::Restart => "Restart the computer.",
             Entry::PowerOff => "Shut the computer down.",
@@ -56,7 +49,7 @@ impl Entry {
 
     /// Whether the countdown may start this entry when it reaches zero.
     pub fn starts_by_itself(self) -> bool {
-        matches!(self, Entry::Boot | Entry::Recovery)
+        matches!(self, Entry::Boot | Entry::Recovery | Entry::SafeMode)
     }
 }
 
@@ -107,6 +100,15 @@ impl Menu {
 
     pub fn selected_entry(&self) -> Entry {
         ENTRIES[self.sel]
+    }
+
+    /// Time left on the countdown in thousandths of the full time (1000 = just started), for a progress ring.
+    pub fn countdown_permille(&self) -> Option<u32> {
+        if !self.counting || self.timeout_ms == 0 {
+            return None;
+        }
+        let left = self.timeout_ms.saturating_sub(self.elapsed_ms);
+        Some((u64::from(left) * 1000 / u64::from(self.timeout_ms)) as u32)
     }
 
     /// Whole seconds left on the countdown (rounded up, so "1" shows until the very end), if it is running.
@@ -177,14 +179,14 @@ impl Menu {
     pub fn footer(&self, out: &mut FooterBuf) {
         out.clear();
         use core::fmt::Write;
-        let target = self.timeout_target().label(false);
+        let target = self.timeout_target().label();
         // When the highlighted entry cannot start by itself, say what the countdown will do instead.
         let pick = self.selected_entry();
         let _ = match (self.countdown(), pick == self.timeout_target()) {
             (Some(1), true) => write!(out, "{target} in 1 second"),
             (Some(n), true) => write!(out, "{target} in {n} seconds"),
-            (Some(1), false) => write!(out, "{target} in 1 second, or press Enter for {}", pick.label(false)),
-            (Some(n), false) => write!(out, "{target} in {n} seconds, or press Enter for {}", pick.label(false)),
+            (Some(1), false) => write!(out, "{target} in 1 second, or press Enter for {}", pick.label()),
+            (Some(n), false) => write!(out, "{target} in {n} seconds, or press Enter for {}", pick.label()),
             (None, _) => write!(out, "Use the arrow keys, then press Enter"),
         };
     }
@@ -266,11 +268,9 @@ mod tests {
         let mut m = Menu::new(15);
         m.tick(10_000);
         assert_eq!(m.key(Key::Down), Outcome::List);
-        assert_eq!(m.selected_entry(), Entry::Wifi);
-        assert_eq!(m.key(Key::Down), Outcome::List);
         assert_eq!(m.selected_entry(), Entry::Recovery);
         assert_eq!(m.countdown(), Some(15), "full countdown after the last key");
-        assert_eq!(footer(&m), "Recovery mode in 15 seconds");
+        assert_eq!(footer(&m), "Recovery in 15 seconds");
         assert_eq!(m.tick(14_999), Outcome::Footer);
         assert_eq!(m.tick(1), Outcome::Run(Entry::Recovery));
     }
@@ -281,17 +281,17 @@ mod tests {
         m.key(Key::Down);
         m.key(Key::Down);
         m.key(Key::Down);
-        assert_eq!(m.selected_entry(), Entry::FirmwareShell);
+        assert_eq!(m.selected_entry(), Entry::FirmwareSetup);
         assert_eq!(m.countdown(), Some(15), "not frozen: a full countdown after the last key");
-        assert_eq!(footer(&m), "Boot BedrockOS in 15 seconds, or press Enter for Firmware shell");
+        assert_eq!(footer(&m), "Boot BedrockOS in 15 seconds, or press Enter for Firmware setup");
         assert_eq!(m.tick(1000), Outcome::Footer);
-        assert_eq!(footer(&m), "Boot BedrockOS in 14 seconds, or press Enter for Firmware shell");
+        assert_eq!(footer(&m), "Boot BedrockOS in 14 seconds, or press Enter for Firmware setup");
         assert_eq!(m.tick(13_000), Outcome::Footer);
-        assert_eq!(footer(&m), "Boot BedrockOS in 1 second, or press Enter for Firmware shell");
-        assert_eq!(m.tick(1000), Outcome::Run(Entry::Boot), "the shell is not started; BedrockOS boots");
+        assert_eq!(footer(&m), "Boot BedrockOS in 1 second, or press Enter for Firmware setup");
+        assert_eq!(m.tick(1000), Outcome::Run(Entry::Boot), "firmware setup is not entered; BedrockOS boots");
         // moving on every entry keeps restarting the full countdown
         let mut m = Menu::new(15);
-        for _ in 0..7 {
+        for _ in 0..5 {
             m.tick(5000);
             m.key(Key::Down);
             assert_eq!(m.countdown(), Some(15));
@@ -314,6 +314,19 @@ mod tests {
         assert!(!Entry::Restart.starts_by_itself());
         assert!(!Entry::PowerOff.starts_by_itself());
         assert!(!Entry::FirmwareSetup.starts_by_itself());
+    }
+
+    #[test]
+    fn safe_mode_may_start_by_itself_and_the_ring_runs_down() {
+        let mut m = Menu::new(4);
+        assert_eq!(m.countdown_permille(), Some(1000));
+        m.tick(1000);
+        assert_eq!(m.countdown_permille(), Some(750));
+        m.key(Key::Down);
+        m.key(Key::Down);
+        assert_eq!(m.selected_entry(), Entry::SafeMode);
+        assert_eq!(m.tick(4000), Outcome::Run(Entry::SafeMode));
+        assert_eq!(m.countdown_permille(), None);
     }
 
     #[test]
@@ -350,15 +363,12 @@ mod tests {
     }
 
     #[test]
-    fn wifi_never_starts_by_itself_and_restart_resets_the_countdown() {
-        assert!(!Entry::Wifi.starts_by_itself());
+    fn restart_resets_the_countdown() {
         let mut m = Menu::new(15);
-        m.key(Key::Down);
-        assert_eq!(m.key(Key::Enter), Outcome::Run(Entry::Wifi));
         m.tick(9_000);
         m.restart();
         assert_eq!(m.countdown(), Some(15));
-        assert_eq!(m.tick(15_000), Outcome::Run(Entry::Boot), "the countdown boots BedrockOS, it never reopens the Wi-Fi list");
+        assert_eq!(m.tick(15_000), Outcome::Run(Entry::Boot));
     }
 
     #[test]
@@ -380,14 +390,13 @@ mod tests {
 
     #[test]
     fn labels_and_descriptions_are_present_and_plain() {
-        assert_eq!(ENTRIES.len(), 8);
+        assert_eq!(ENTRIES.len(), 6);
         for e in ENTRIES {
-            assert!(!e.label(false).is_empty() && !e.label(true).is_empty());
+            assert!(!e.label().is_empty());
             assert!(e.description().len() < 70, "{e:?} description must fit on one line");
             assert!(e.description().ends_with('.'));
         }
-        assert_eq!(Entry::Debug.label(true), "Debug logging: on");
-        assert_eq!(Entry::Debug.label(false), "Debug logging: off");
+        assert_eq!(Entry::SafeMode.label(), "Safe mode (no network)");
     }
 
     #[test]

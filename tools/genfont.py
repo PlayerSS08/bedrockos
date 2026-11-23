@@ -20,7 +20,7 @@ ASCII = list(range(0x20, 0x7F))
 FACES = [
     ("SANS_16", "Inter.ttf", 16, {"opsz": 16, "wght": 450}, ASCII),
     ("SANS_24", "Inter.ttf", 24, {"opsz": 24, "wght": 500}, ASCII),
-    ("WORDMARK", "Inter.ttf", 88, {"opsz": 32, "wght": 800}, [ord(c) for c in "BEDROCKOS"]),
+    ("WORDMARK", "Inter.ttf", 64, {"opsz": 32, "wght": 800}, [ord(c) for c in "BEDROCKOS"]),
     ("MONO", "JetBrainsMono.ttf", 15, {"wght": 450}, ASCII),
     ("MONO_L", "JetBrainsMono.ttf", 22, {"wght": 450}, ASCII),
 ]

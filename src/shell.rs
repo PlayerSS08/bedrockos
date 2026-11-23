@@ -3461,6 +3461,33 @@ impl History {
     }
 }
 
+/// Sets up the RAM filesystem: standard folders, the programs shipped in the image (`/bin`) and base
+/// configuration files. Called by the boot "Filesystem" stage; safe to call again (it only fills gaps).
+pub fn prepare_fs() {
+    let f = fs();
+    for dir in &["/bin", "/etc", "/home", "/tmp", "/usr", "/var"] {
+        if !f.is_dir(dir) {
+            let _ = f.mkdir(dir);
+        }
+    }
+    // The programs that ship inside the image (`cat`, `ls`, ...), copied into /bin if not already there.
+    if let Some(progs) = crate::initfs::unpack(crate::initfs::ARCHIVE) {
+        for (name, data) in progs {
+            let path = alloc::format!("/bin/{name}");
+            if f.read(&path).is_none() {
+                let _ = f.write(&path, &data);
+            }
+        }
+    }
+    if f.read("/etc/hostname").is_none() {
+        let _ = f.write("/etc/hostname", b"bedrock\n");
+    }
+    if f.read("/etc/os-release").is_none() {
+        let rel = alloc::format!("NAME=BedrockOS\nVERSION={v}\nID=bedrockos\nPRETTY_NAME=\"BedrockOS {v}\"\n", v = crate::VERSION);
+        let _ = f.write("/etc/os-release", rel.as_bytes());
+    }
+}
+
 /// The prompt: `bedrock> ` at the top, `bedrock:/sd> ` inside a folder, so you can see where you are.
 fn prompt() -> String {
     if cwd().is_empty() {
@@ -3656,29 +3683,7 @@ pub extern "C" fn shell_task(_: usize) {
     // A line may be longer than the screen is wide: the console wraps it onto the next rows.
     ed.set_max(MAX_LINE);
 
-    // Ensure standard system directories and base config files exist in RAMFS on boot.
-    let f = fs();
-    for dir in &["/bin", "/etc", "/home", "/tmp", "/usr", "/var"] {
-        if !f.is_dir(dir) {
-            let _ = f.mkdir(dir);
-        }
-    }
-    // The programs that ship inside the image (`cat`, `ls`, ...), copied into /bin if not already there.
-    if let Some(progs) = crate::initfs::unpack(crate::initfs::ARCHIVE) {
-        for (name, data) in progs {
-            let path = alloc::format!("/bin/{name}");
-            if f.read(&path).is_none() {
-                let _ = f.write(&path, &data);
-            }
-        }
-    }
-    if f.read("/etc/hostname").is_none() {
-        let _ = f.write("/etc/hostname", b"aeon-host\n");
-    }
-    if f.read("/etc/os-release").is_none() {
-        let _ = f.write("/etc/os-release", b"NAME=BedrockOS OS\nVERSION=0.11.0\nID=aeon\nPRETTY_NAME=\"BedrockOS OS 0.11.0-uefi\"\n");
-    }
-
+    prepare_fs();
     persist_restore();
     wifi_autoconnect();
     out!("\nBedrockOS shell. Type `help`.\n{}", prompt());

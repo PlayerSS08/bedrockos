@@ -407,6 +407,28 @@ impl Console {
         self.draw_pill(x, y, w, h, track);
     }
 
+    /// Hands the screen to the animated boot screen (`bootfx`): nothing is drawn here and log output is
+    /// held back (it stays in the ring and on serial), as during the old splash.
+    pub fn hold_for_bootfx(&mut self) {
+        self.splash = true;
+        self.menu = false;
+    }
+
+    /// Takes the screen back from the boot screen and shows the log full-screen; the caller replays the
+    /// held-back lines.
+    pub fn release_to_log(&mut self) {
+        self.splash = false;
+        self.menu = false;
+        self.clear();
+        self.fullscreen_log();
+    }
+
+    /// Takes the screen back from the boot screen without drawing the log (the shell or desktop follows).
+    pub fn release_quiet(&mut self) {
+        self.splash = false;
+        self.menu = false;
+    }
+
     pub fn splash_active(&self) -> bool {
         self.splash
     }

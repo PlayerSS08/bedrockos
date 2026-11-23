@@ -10,7 +10,7 @@ jobs:
   check:
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Rust with clippy and the UEFI target
         run: |
           rustup toolchain install stable --profile minimal --component clippy --target x86_64-unknown-uefi

@@ -10,10 +10,11 @@
 
 use core::ffi::c_void;
 use core::fmt::Write;
-use core::sync::atomic::{AtomicBool, Ordering};
+use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use bedrockos::acpi::{self, Rsdp};
 use bedrockos::anim;
+use bedrockos::bootfx;
 use bedrockos::arch;
 use bedrockos::bootcount;
 use bedrockos::bootinfo::{BootInfo, FbInfo, SecureBoot, MAX_REGIONS};
@@ -99,7 +100,9 @@ fn stage(name: &'static str) {
         }
         s.n - 1
     };
-    bar_to(splash::stage_permille(done, TOTAL_STAGES));
+    if !bootfx::active() {
+        bar_to(splash::stage_permille(done, TOTAL_STAGES));
+    }
     info!("stage", "enter {}", name);
 }
 
@@ -628,6 +631,20 @@ fn set_loader_var(rt: &RuntimeServices, name: &[u16], value: &str) {
     let _ = (rt.set_variable)(name.as_ptr(), &uefi::LOADER_GUID, uefi::VAR_BS_RT, (n + 1) * 2, buf.as_ptr().cast());
 }
 
+/// The system table, for the boot screen's key check before ExitBootServices (0 afterwards).
+static FW_ST: AtomicUsize = AtomicUsize::new(0);
+
+/// Esc or V through the firmware keyboard (works with USB keyboards): the boot screen's verbose switch.
+fn fw_verbose_key() -> bool {
+    let p = FW_ST.load(Ordering::Relaxed);
+    if p == 0 {
+        return false;
+    }
+    // SAFETY: FW_ST holds the firmware system table and is cleared before ExitBootServices.
+    let st = unsafe { &*(p as *const SystemTable) };
+    matches!(read_key(st), Some((0x17, _)) | Some((_, 0x76)) | Some((_, 0x56)))
+}
+
 /// Next key waiting in the firmware's input queue, as `(scan_code, unicode)`.
 fn read_key(st: &SystemTable) -> Option<(u16, u16)> {
     if st.con_in.is_null() {
@@ -670,57 +687,12 @@ fn reboot_to_firmware_setup(rt: &RuntimeServices) {
     (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null());
 }
 
-/// A small shell that runs while the firmware's boot services are still active. Input goes through
-/// the firmware, so USB keyboards work here even though the kernel has no USB driver.
-fn firmware_shell(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices) {
-    const PROMPT: &[u8] = b"fw> ";
-    const HELP: &[u8] = b"commands: info version security tpm lastpanic log echo <text> | boot (continue) | reboot | shutdown\n";
-    info!("fwsh", "firmware shell: boot services are still active, so USB keyboards work. `help` lists commands, `boot` continues.");
-    let mut line = [0u8; 120];
-    let mut len = 0usize;
-    log::print_raw(PROMPT);
-    loop {
-        let _ = (bs.stall)(10_000);
-        let Some((_, ch)) = read_key(st) else { continue };
-        match ch {
-            0x0D => {
-                log::print_raw(b"\n");
-                let text = core::str::from_utf8(&line[..len]).unwrap_or("").trim();
-                match text {
-                    "boot" | "exit" => return,
-                    "" => {}
-                    "help" | "?" => log::print_raw(HELP),
-                    "reboot" => (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null()),
-                    "shutdown" => (rt.reset_system)(uefi::RESET_SHUTDOWN, 0, 0, core::ptr::null()),
-                    other => {
-                        if !shell::run_firmware_command(other) {
-                            log::print_raw(b"not available before the kernel starts; try `help`\n");
-                        }
-                    }
-                }
-                len = 0;
-                log::print_raw(PROMPT);
-            }
-            0x08 if len > 0 => {
-                len -= 1;
-                log::print_raw(b"\x08 \x08");
-            }
-            0x20..=0x7E if len < line.len() => {
-                line[len] = ch as u8;
-                len += 1;
-                log::print_raw(&[ch as u8]);
-            }
-            _ => {}
-        }
-    }
-}
-
 /// Dawn, the boot menu. It opens at once with "Boot BedrockOS" highlighted and a countdown (15 s by default).
 /// Arrow keys move the highlight and restart the countdown; when it ends the highlighted entry runs, but only
 /// "Boot BedrockOS" and "Recovery mode" may start by themselves (see `bedrockos::menulogic`). Enter runs the highlighted
 /// entry at once; any other key stops the countdown. Keys are read through the firmware, so USB keyboards work.
 /// Returns the possibly updated options.
-fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts: BootOpts) -> BootOpts {
+fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, opts: BootOpts) -> BootOpts {
     use bedrockos::menulogic::{Entry, Key, Menu, Outcome};
     if opts.menu_timeout == 0 || st.con_in.is_null() {
         return opts;
@@ -728,263 +700,123 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, mut opts
     // SAFETY: con_in is a live protocol (checked non-null); resetting also drops stale keystrokes.
     unsafe { ((*st.con_in).reset)(st.con_in, false) };
     info!("menu", "menu open: boot starts in {} s (arrow keys choose another entry, Enter selects, any other key stops the countdown)", opts.menu_timeout);
-    // Dawn owns the screen; log lines are held back and replayed when it closes.
-    info!("menu", "options: Boot BedrockOS | Wi-Fi networks | Recovery mode | Firmware shell | Debug logging | Firmware setup | Restart | Power off");
+    info!("menu", "options: Boot BedrockOS | Recovery | Safe mode (no network) | Firmware setup | Restart | Power off");
+    // The menu reads keys itself; the boot screen's Esc/V check would steal them.
+    bootfx::set_key_poll(None);
     let hz = u128::from(log::tsc_hz().max(1));
     let mut menu = Menu::new(opts.menu_timeout);
     let mut last = bedrockos::arch::rdtsc();
-    draw_menu(&menu, opts.debug);
-    loop {
-        let _ = (bs.stall)(20_000);
+    draw_menu(&menu, true);
+    let entry = loop {
+        let _ = (bs.stall)(5_000);
         // Time first, so a key press never hides time that has already passed.
         let now = bedrockos::arch::rdtsc();
         let ms = (u128::from(now.wrapping_sub(last)) * 1000 / hz).min(u128::from(u32::MAX)) as u32;
         last = now;
         let mut outcome = menu.tick(ms);
         if matches!(outcome, Outcome::Idle | Outcome::Footer) {
-            if outcome == Outcome::Footer {
-                show_footer(&menu);
-            }
-            let Some((scan, ch)) = read_key(st) else { continue };
-            // UEFI scan codes: 0x01 up, 0x02 down, 0x05 home, 0x06 end.
-            let key = match (scan, ch as u8 as char) {
-                (0x01, _) => Key::Up,
-                (0x02, _) => Key::Down,
-                (0x05, _) => Key::Home,
-                (0x06, _) => Key::End,
-                (_, '\r') => Key::Enter,
-                _ => Key::Other,
-            };
-            outcome = menu.key(key);
-        }
-        let entry = match outcome {
-            Outcome::Idle => continue,
-            Outcome::Footer => {
-                show_footer(&menu);
-                continue;
-            }
-            Outcome::List => {
-                draw_menu(&menu, opts.debug);
-                continue;
-            }
-            Outcome::Run(e) => e,
-        };
-        match entry {
-            Entry::Boot => {
-                leave_menu(true);
-                return opts;
-            }
-            Entry::Wifi => {
-                wifi_picker(st, bs);
-                // SAFETY: con_in is a live protocol (checked at the top); drops keys typed during the exchange.
-                unsafe { ((*st.con_in).reset)(st.con_in, false) };
-                let _ = log::with_console(|c| c.menu_clear_body());
-                menu.restart();
-                last = bedrockos::arch::rdtsc();
-                draw_menu(&menu, opts.debug);
-                show_footer(&menu);
-            }
-            Entry::Recovery => {
-                boot_info().recovery = true;
-                info!("menu", "recovery mode selected: no timer, no scheduler");
-                leave_menu(false);
-                return opts;
-            }
-            Entry::FirmwareShell => {
-                leave_menu(false);
-                firmware_shell(st, bs, rt);
-                return opts;
-            }
-            Entry::Debug => {
-                opts.debug = !opts.debug;
-                opts.quiet = false;
-                log::set_max_level(if opts.debug { Level::Trace } else { Level::Debug });
-                info!("menu", "debug logging {}", if opts.debug { "on" } else { "off" });
-                draw_menu(&menu, opts.debug);
-            }
-            Entry::FirmwareSetup => reboot_to_firmware_setup(rt),
-            Entry::Restart => (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null()),
-            Entry::PowerOff => (rt.reset_system)(uefi::RESET_SHUTDOWN, 0, 0, core::ptr::null()),
-        }
-    }
-}
-
-/// Paints the whole menu: the list, the line about the highlighted entry and the countdown line.
-fn draw_menu(menu: &bedrockos::menulogic::Menu, debug: bool) {
-    let mut ssid = [0u8; bedrockos::wifihost::SSID_MAX];
-    let mut status = bedrockos::menulogic::FooterBuf::new();
-    if let Some(n) = bedrockos::wifihost::connected(&mut ssid) {
-        let _ = write!(status, "Connected to {}. Enter to choose another network.", core::str::from_utf8(&ssid[..n]).unwrap_or("?"));
-    }
-    let entries = bedrockos::menulogic::ENTRIES.map(|e| {
-        let desc = if e == bedrockos::menulogic::Entry::Wifi && !status.as_str().is_empty() { status.as_str() } else { e.description() };
-        (e.label(debug), desc)
-    });
-    let mut footer = bedrockos::menulogic::FooterBuf::new();
-    menu.footer(&mut footer);
-    let _ = log::with_console(|c| c.menu_draw(&entries, menu.selected(), footer.as_str()));
-}
-
-/// Shows a line at the bottom of the boot menu.
-fn menu_say(text: &str) {
-    let _ = log::with_console(|c| c.menu_footer(text));
-}
-
-/// Next key from the firmware, waiting for it.
-fn next_key(st: &SystemTable, bs: &BootServices) -> (u16, u16) {
-    loop {
-        let _ = (bs.stall)(10_000);
-        if let Some(k) = read_key(st) {
-            return k;
-        }
-    }
-}
-
-/// Password entry on the footer line, shown as stars. `None` when Esc cancels.
-fn read_password(st: &SystemTable, bs: &BootServices, ssid: &str, pass: &mut [u8; 63]) -> Option<usize> {
-    let mut plen = 0usize;
-    loop {
-        let mut f = bedrockos::menulogic::FooterBuf::new();
-        let _ = write!(f, "Password for {}: ", ssid);
-        for _ in 0..plen.min(24) {
-            let _ = f.write_str("*");
-        }
-        if plen < 8 {
-            let _ = f.write_str("  (8+ characters)");
-        }
-        menu_say(f.as_str());
-        match next_key(st, bs) {
-            (0x17, _) => return None,
-            (_, 0x0D) if plen >= 8 => return Some(plen),
-            (_, 0x08) => plen = plen.saturating_sub(1),
-            (_, ch @ 0x20..=0x7E) if plen < pass.len() => {
-                pass[plen] = ch as u8;
-                plen += 1;
-            }
-            _ => {}
-        }
-    }
-}
-
-/// The Wi-Fi list opened from Dawn: asks the host helper (COM2) to scan, lets the reader pick a network with the
-/// arrow keys, asks for the password and has the host join it. Nothing here touches a radio: in a VM the host's
-/// Wi-Fi is the only Wi-Fi there is (see `bedrockos::wifihost`).
-fn wifi_picker(st: &SystemTable, bs: &BootServices) {
-    use bedrockos::wifihost::{link, Net, MAX_NETS};
-    const LABEL: usize = 64;
-    'rescan: loop {
-        let _ = log::with_console(|c| c.menu_clear_body());
-        menu_say("Looking for Wi-Fi networks...");
-        let mut nets = [Net::EMPTY; MAX_NETS];
-        let count = match link::scan(&mut nets) {
-            Ok(n) => n,
-            Err(e) => {
-                info!("wifi", "scan failed: {}", e.as_str());
-                menu_say(e.as_str());
-                let _ = next_key(st, bs);
-                return;
-            }
-        };
-        info!("wifi", "host scan found {} network(s)", count);
-        // Labels like "Hostel_WiFi   82%  locked", then "Scan again" and "Back".
-        let mut labels = [[0u8; LABEL]; MAX_NETS];
-        let mut lens = [0usize; MAX_NETS];
-        for i in 0..count {
-            let mut b = bedrockos::menulogic::FooterBuf::new();
-            let n = &nets[i];
-            let _ = write!(b, "{}   {}%{}{}", n.ssid(), n.signal, if n.secure { "  locked" } else { "  open" }, if n.current { "  (now)" } else { "" });
-            let t = b.as_str().as_bytes();
-            let l = t.len().min(LABEL);
-            labels[i][..l].copy_from_slice(&t[..l]);
-            lens[i] = l;
-        }
-        let total = count + 2;
-        let mut sel = 0usize;
-        let _ = log::with_console(|c| c.menu_clear_body());
-        loop {
-            let mut entries = [("", ""); MAX_NETS + 2];
-            for i in 0..count {
-                let label = core::str::from_utf8(&labels[i][..lens[i]]).unwrap_or("?");
-                let desc = if nets[i].current {
-                    "The host is on this network now. Enter to use it."
-                } else if nets[i].secure {
-                    "Press Enter, then type the Wi-Fi password."
-                } else {
-                    "Open network, no password."
+            if let Some((scan, ch)) = read_key(st) {
+                // UEFI scan codes: 0x01 up, 0x02 down, 0x05 home, 0x06 end.
+                let key = match (scan, ch as u8 as char) {
+                    (0x01, _) => Key::Up,
+                    (0x02, _) => Key::Down,
+                    (0x05, _) => Key::Home,
+                    (0x06, _) => Key::End,
+                    (_, '\r') => Key::Enter,
+                    _ => Key::Other,
                 };
-                entries[i] = (label, desc);
-            }
-            entries[count] = ("Scan again", "Look for networks again.");
-            entries[count + 1] = ("Back", "Return to the boot menu.");
-            let _ = log::with_console(|c| c.menu_draw(&entries[..total], sel, ""));
-            menu_say(if count == 0 { "No networks found. Scan again or go back." } else { "Arrow keys choose a network, Enter selects, Esc goes back." });
-            match next_key(st, bs) {
-                (0x01, _) => sel = (sel + total - 1) % total,
-                (0x02, _) => sel = (sel + 1) % total,
-                (0x17, _) => return,
-                (_, 0x0D) if sel == count => continue 'rescan,
-                (_, 0x0D) if sel == count + 1 => return,
-                (_, 0x0D) => {
-                    let net = nets[sel];
-                    let mut pass = [0u8; 63];
-                    let plen = if net.secure && !net.current {
-                        match read_password(st, bs, net.ssid(), &mut pass) {
-                            Some(n) => n,
-                            None => continue,
-                        }
-                    } else {
-                        0
-                    };
-                    let mut f = bedrockos::menulogic::FooterBuf::new();
-                    let _ = write!(f, "Connecting to {}...", net.ssid());
-                    menu_say(f.as_str());
-                    let result = link::connect(net.ssid(), &pass[..plen]);
-                    pass.fill(0); // the password is not kept
-                    let mut f = bedrockos::menulogic::FooterBuf::new();
-                    match result {
-                        Ok(_) => {
-                            bedrockos::wifihost::set_connected(net.ssid());
-                            info!("wifi", "host joined the chosen network");
-                            let _ = write!(f, "Connected to {}. BedrockOS goes online when it starts.", net.ssid());
-                            menu_say(f.as_str());
-                            let _ = (bs.stall)(1_500_000);
-                            return;
-                        }
-                        Err(e) => {
-                            info!("wifi", "connect failed: {}", e.as_str());
-                            let _ = write!(f, "Not connected: {}", e.as_str());
-                            menu_say(f.as_str());
-                            let _ = next_key(st, bs);
-                        }
-                    }
-                }
-                _ => {}
+                outcome = menu.key(key);
             }
         }
+        match outcome {
+            Outcome::Run(e) => break e,
+            Outcome::List | Outcome::Footer => draw_menu(&menu, true),
+            Outcome::Idle => draw_menu(&menu, false),
+        }
+    };
+    match entry {
+        Entry::Boot => info!("menu", "boot continues"),
+        Entry::SafeMode => {
+            boot_info().safe_mode = true;
+            info!("menu", "safe mode selected: no network or Wi-Fi drivers");
+        }
+        Entry::Recovery => {
+            boot_info().recovery = true;
+            info!("menu", "recovery mode selected: no timer, no scheduler");
+            bootfx::to_log("recovery mode: showing boot messages");
+            return opts;
+        }
+        Entry::FirmwareSetup => reboot_to_firmware_setup(rt),
+        Entry::Restart => (rt.reset_system)(uefi::RESET_COLD, 0, 0, core::ptr::null()),
+        Entry::PowerOff => (rt.reset_system)(uefi::RESET_SHUTDOWN, 0, 0, core::ptr::null()),
     }
+    // Back to the progress bar; Esc/V works again.
+    if FW_ST.load(Ordering::Relaxed) != 0 {
+        bootfx::set_key_poll(Some(fw_verbose_key));
+    }
+    if !bootfx::active() {
+        leave_plain_menu();
+    }
+    opts
 }
 
-/// Repaints only the line under the menu: the countdown, or the key help once it has stopped.
-fn show_footer(menu: &bedrockos::menulogic::Menu) {
+/// Draws the menu on the boot screen (`force` = draw now, not only when a frame is due). Without the
+/// animation (huge screens, verbose boot) the console's plain menu is used.
+fn draw_menu(menu: &bedrockos::menulogic::Menu, force: bool) {
+    use bedrockos::menulogic::ENTRIES;
+    let labels = ENTRIES.map(|e| e.label());
     let mut footer = bedrockos::menulogic::FooterBuf::new();
     menu.footer(&mut footer);
-    let _ = log::with_console(|c| c.menu_footer(footer.as_str()));
+    let desc = menu.selected_entry().description();
+    if bootfx::active() {
+        let view = bedrockos::bootscene::MenuView {
+            items: &labels,
+            selected: menu.selected(),
+            description: desc,
+            footer: footer.as_str(),
+            ring: menu.countdown_permille().map(|p| p as f32 / 1000.0),
+        };
+        bootfx::menu_frame(&view, force);
+    } else if force {
+        let entries = ENTRIES.map(|e| (e.label(), e.description()));
+        let _ = log::with_console(|c| c.menu_draw(&entries, menu.selected(), footer.as_str()));
+        let _ = log::with_console(|c| c.menu_footer(footer.as_str()));
+    }
 }
 
-/// Closes the menu. With `boot_on` the splash comes back (the normal boot carries on); otherwise
-/// everything logged so far is shown on the normal log screen.
-fn leave_menu(boot_on: bool) {
-    if boot_on {
-        let _ = log::with_console(|c| c.menu_resume());
-        if log::with_console(|c| c.splash_active()).unwrap_or(false) {
-            return; // the splash holds the log back, as in any normal boot
-        }
-    } else {
-        let _ = log::with_console(|c| c.menu_end());
-    }
+/// Closes the plain (console) menu and shows what was logged meanwhile.
+fn leave_plain_menu() {
+    let _ = log::with_console(|c| c.menu_end());
     log::replay(|bytes| {
         let _ = log::with_console(|c| c.write_line(Level::Info, bytes));
     });
+}
+
+/// Wi-Fi hardware probe (a real boot stage): lists network controllers of PCI class 0x02/0x80
+/// ("other network", where Wi-Fi chips sit) and says whether BedrockOS has a driver for any of them.
+fn wifi_probe_stage() {
+    if boot_info().safe_mode {
+        bootfx::stage("Wi-Fi: skipped (safe mode)", 860);
+        return;
+    }
+    let mut found = 0u32;
+    let mut known: Option<&'static str> = None;
+    bedrockos::pci::for_each(|d| {
+        if d.header.class == 0x02 && d.header.subclass == 0x80 {
+            found += 1;
+            info!("wifi", "PCI {:02x}:{:02x}.{} {:04x}:{:04x} wireless network controller", d.bus, d.dev, d.func, d.header.vendor, d.header.device);
+            if d.header.vendor == bedrockos::rtw89::VENDOR_REALTEK && d.header.device == bedrockos::rtw89::DEVICE_8852BT {
+                known = Some("Realtek RTL8852BE (driver not finished)");
+            }
+        }
+    });
+    let label = match (found, known) {
+        (0, _) => "Wi-Fi hardware: no PCI Wi-Fi adapter",
+        (_, Some(_)) => "Wi-Fi hardware: Realtek RTL8852BE found, no driver yet",
+        _ => "Wi-Fi hardware: adapter found, not supported",
+    };
+    info!("wifi", "probe: {} PCI wireless controller(s); {}", found, known.unwrap_or("no supported chip"));
+    bootfx::stage(label, 860);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1137,16 +969,26 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
                 c.clear();
                 c.fullscreen_log();
             } else {
-                // Splash: the AEON wordmark fades in (ease-out, 180 ms) and a thin bar tracks the real boot stages.
-                c.begin_splash();
-                for step in 1..=10u16 {
-                    c.fade_logo((u32::from(anim::ease_out_cubic(step * 100)) * 255 / 1000) as u8);
-                    let _ = (bs.stall)(18_000);
-                }
+                // The animated boot screen (bootfx) owns the screen; the console holds the log back.
+                c.hold_for_bootfx();
             }
+            let animate = c.splash_active();
             let (cols, rows) = c.size();
             log::detach_conout();
             log::attach_console(c);
+            if animate {
+                if bootfx::start(&f, arch::rdtsc()) {
+                    FW_ST.store(st as *const SystemTable as usize, Ordering::Relaxed);
+                    bootfx::set_key_poll(Some(fw_verbose_key));
+                } else {
+                    // Screen larger than the back buffer: the plain splash.
+                    let _ = log::with_console(|c| {
+                        c.release_quiet();
+                        c.begin_splash();
+                        c.fade_logo(255);
+                    });
+                }
+            }
             // The firmware console no longer shares the screen; hide its cursor.
             if !st.con_out.is_null() {
                 // SAFETY: con_out is a live text-output protocol until ExitBootServices.
@@ -1179,6 +1021,7 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
 
     // ---- Stage 3: platform discovery ----
     stage("platform-discovery");
+    bootfx::stage("Reading firmware tables", 50);
     {
         let b = boot_info();
         b.fw_vendor_len = {
@@ -1239,6 +1082,7 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
 
     // ---- Stage 4: security init (random seed, measured boot) ----
     stage("security-init");
+    bootfx::stage("Gathering randomness", 90);
     {
         let (seed, strong, persisted) = gather_seed(bs, rt, feat.rdrand);
         let b = boot_info();
@@ -1264,6 +1108,10 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
 
     // ---- Stage 5: ExitBootServices ----
     stage("exit-boot-services");
+    bootfx::stage("Reading the memory map", 150);
+    // From here on the firmware keyboard is gone: the boot screen reads the PS/2 controller instead.
+    FW_ST.store(0, Ordering::Relaxed);
+    bootfx::set_key_poll(Some(bootfx::ps2_verbose_key));
     measure_phase(bs, if boot_info().recovery { tcg2::PHASE_RECOVERY } else { tcg2::PHASE_EXIT_BOOT });
     verify_eventlog(bs);
     // Size the buffer from the firmware's own answer, with slack because the allocation below (and
@@ -1324,6 +1172,7 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
         b.mem = memmap::summarize(b.regions());
     }
     stage("kernel-env");
+    bootfx::stage("Setting up paging and memory protection", 220);
     info!("boot", "boot services exited after {} attempt(s)", attempts + 1);
     {
         let b = boot_info();
@@ -1459,6 +1308,7 @@ extern "C" fn kernel_main() -> ! {
     info!("kernel", "kernel_main entered on kernel stack rsp={:#x}", rsp);
 
     stage("kernel-memory");
+    bootfx::stage("Memory: frame allocator and heap", 300);
     // Memory management: physical frames first, then the heap carved from them.
     // SAFETY: boot services have exited, the map in BootInfo is final, and this runs once.
     let fs = unsafe { mm::init_frames(boot_info()) };
@@ -1471,18 +1321,28 @@ extern "C" fn kernel_main() -> ! {
     );
     // SAFETY: init_frames has run; this is the only heap initialisation.
     let heap = unsafe { mm::init_heap() };
+    bootfx::stage("Scanning PCI devices", 360);
     bedrockos::pci::scan();
-    bedrockos::vblk::probe();
+    bootfx::stage("Input devices: USB (xHCI), PS/2, touchpad", 420);
     bedrockos::xhci::init();
     bedrockos::touchpad_hw::init();
+    bootfx::stage("Storage: AHCI and virtio-blk", 540);
+    bedrockos::vblk::probe();
     bedrockos::ahci::probe();
-    bedrockos::netdev::probe();
+    if boot_info().safe_mode {
+        bootfx::stage("Network: skipped (safe mode)", 640);
+        warn!("net", "safe mode: network drivers not started");
+    } else {
+        bootfx::stage("Network: wired and virtual adapters", 640);
+        bedrockos::netdev::probe();
+    }
     if heap == 0 {
         error!("mm", "could not allocate a kernel heap");
     } else {
         info!("mm", "heap: {} KiB", heap / 1024);
     }
 
+    bootfx::stage("Interrupts and timer", 720);
     // Tick source: PIC + PIT. If no interrupt arrives, fall back to polling instead of hanging.
     // Recovery mode never starts the timer: the point is to reach a shell with the fewest moving parts.
     let irq_mode = if boot_info().recovery {
@@ -1517,6 +1377,10 @@ extern "C" fn kernel_main() -> ! {
     };
 
     stage("kernel-tasks");
+    bootfx::stage("Scheduler", 790);
+    wifi_probe_stage();
+    bootfx::stage("Filesystem: RAM filesystem and programs", 930);
+    bedrockos::shell::prepare_fs();
     // SAFETY: reads the stage table written during boot; no writer is active.
     let stages = unsafe { &*STAGES.as_ptr() };
     let hz = log::tsc_hz();
@@ -1529,8 +1393,10 @@ extern "C" fn kernel_main() -> ! {
     }
     info!("boot", "boot complete uptime_us={} mode={}", log::uptime_us(), if irq_mode { "preemptive" } else { "single-task" });
 
-    // Finish the splash: bar to 100 %, a short hold so the eye sees it complete, a fade-out, then the shell.
-    if log::with_console(|c| c.splash_active()).unwrap_or(false) {
+    // Finish the boot screen: bar to 100 %, a short hold, a fade, then the shell (the desktop from milestone 3).
+    if bootfx::active() {
+        bootfx::finish();
+    } else if log::with_console(|c| c.splash_active()).unwrap_or(false) {
         bar_to(1000);
         wait_us(120_000);
         for step in (0..10u16).rev() {

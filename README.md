@@ -4,7 +4,8 @@ A small x86_64 UEFI operating system in Rust (`no_std`, no third-party crates in
 the Aeon 0.11.0 kernel. The goal: an animated boot, a graphical desktop with Notes, Tasks, a Browser, a
 Terminal, Wi-Fi and Settings apps, running by itself in VirtualBox and from a USB stick on real UEFI PCs.
 
-**Current state: milestone 1 of 10.** It boots in VirtualBox to the (inherited) shell. See
+**Current state: milestone 2 of 10.** It boots in VirtualBox with an animated boot screen and boot menu, then
+reaches the (inherited) text shell. There is no desktop yet. See
 [`docs/STATUS.md`](docs/STATUS.md) for exactly what is done and tested, and [`docs/PLAN.md`](docs/PLAN.md)
 for the design.
 

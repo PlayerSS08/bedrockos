@@ -30,6 +30,7 @@ pub mod textcmd;
 pub mod bootcount;
 pub mod bootinfo;
 pub mod bootopts;
+pub mod bootscene;
 pub mod cmdhelp;
 pub mod cpuid;
 pub mod dns;
@@ -43,6 +44,7 @@ pub mod font;
 pub mod fontdata;
 pub mod gfont;
 pub mod gopmode;
+pub mod gui;
 pub mod frames;
 pub mod heapalloc;
 pub mod http;
@@ -103,6 +105,8 @@ pub mod global;
 #[cfg(target_os = "uefi")]
 #[macro_use]
 pub mod log;
+#[cfg(target_os = "uefi")]
+pub mod bootfx;
 #[cfg(target_os = "uefi")]
 pub mod ahci;
 #[cfg(target_os = "uefi")]
