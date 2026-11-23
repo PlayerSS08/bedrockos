@@ -1,4 +1,4 @@
-//! Interactive kernel shell and the status-bar task. Both run as scheduler tasks.
+﻿//! Interactive kernel shell and the status-bar task. Both run as scheduler tasks.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -3268,6 +3268,51 @@ fn cmd_pi(rest: &str) {
     out!("  Reference Pi     : 3.141592\n");
 }
 
+/// `task add <text>`, `task list`, `task done <n>`, `task rm <n>`: the same list as the Tasks app.
+fn cmd_task(rest: &str) {
+    use crate::apps::{parse_tasks, tasks_text, Task, TASKS_FILE};
+    let mut tasks = parse_tasks(fs().read(TASKS_FILE).unwrap_or(b""));
+    let (sub, arg) = rest.split_once(' ').map_or((rest, ""), |(a, b)| (a, b.trim()));
+    let pick = |arg: &str, n: usize| arg.parse::<usize>().ok().filter(|&i| i >= 1 && i <= n);
+    match sub {
+        "" | "list" | "ls" => {}
+        "add" if !arg.is_empty() => {
+            tasks.push(Task { text: String::from(arg.trim_matches('"')), done: false });
+            out!("added task {}\n", tasks.len());
+        }
+        "done" | "rm" | "del" => match pick(arg, tasks.len()) {
+            Some(i) if sub == "done" => {
+                tasks[i - 1].done = true;
+                out!("task {} done\n", i);
+            }
+            Some(i) => {
+                tasks.remove(i - 1);
+                out!("task {} removed\n", i);
+            }
+            None => {
+                out!("usage: task {} <number from `task list`>\n", sub);
+                return;
+            }
+        },
+        _ => {
+            out!("usage: task add <text> | task list | task done <n> | task rm <n>\n");
+            return;
+        }
+    }
+    if !matches!(sub, "" | "list" | "ls") {
+        if fs().write(TASKS_FILE, &tasks_text(&tasks)).is_err() {
+            out!("could not save the task list\n");
+        }
+        crate::bootfx::tasks_reload();
+    }
+    if tasks.is_empty() {
+        out!("no tasks (add one with `task add <text>`)\n");
+    }
+    for (i, t) in tasks.iter().enumerate() {
+        out!("{:>3}. [{}] {}\n", i + 1, if t.done { 'x' } else { ' ' }, t.text);
+    }
+}
+
 fn run(line: &str, hist: &History) {
     let line = line.trim();
     if !shparse::is_plain(line) {
@@ -3407,6 +3452,22 @@ fn run_plain(line: &str, hist: &History) {
         "shutdown" => {
             persist_save(UNSAVED.load(core::sync::atomic::Ordering::Relaxed));
             power::shutdown()
+        }
+        "task" => cmd_task(rest),
+        "net" => {
+            out!("Host connection (laptop Wi-Fi): the VM's network card, through VirtualBox NAT or Bridged.\n");
+            out!("The laptop chooses the Wi-Fi network in this mode. OS Wi-Fi: no supported chip yet (milestone 8).\n");
+            cmd_ip("");
+        }
+        // A group name from `help` (network, files, tasks, ...) lists that group's commands.
+        other if cmdhelp::GROUPS.contains(&other) => {
+            if other == "tasks" && !rest.is_empty() {
+                cmd_task(rest);
+                return;
+            }
+            for c in cmdhelp::COMMANDS.iter().filter(|c| c.group == other) {
+                out!("  {:<22} {}\n", c.usage, c.about);
+            }
         }
         other if find_program(other).is_some() => run_job_line(line),
         other => match cmdhelp::suggest(other) {
