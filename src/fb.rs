@@ -118,6 +118,8 @@ pub struct Console {
     pointer: Option<Pointer>,
     pointer_saved: [u32; pointer::SPRITE_W * pointer::SPRITE_H],
     pointer_shown_at: Option<(i32, i32)>,
+    /// The desktop has the pointer outside this console: do not paint it.
+    pointer_hidden: bool,
 }
 
 impl Console {
@@ -175,6 +177,7 @@ impl Console {
             pointer: None,
             pointer_saved: [0; pointer::SPRITE_W * pointer::SPRITE_H],
             pointer_shown_at: None,
+            pointer_hidden: false,
         };
         c.logo_row = rows.saturating_sub(logo_rows) / 3;
         // Put the log below the logo when the screen is big enough to keep a useful log area.
@@ -929,7 +932,7 @@ impl Console {
     /// full-screen editor own the screen (the editor repaints single cells and would leave pointer fragments).
     pub fn pointer_paint(&mut self) {
         let Some(p) = self.pointer else { return };
-        if self.splash || self.menu || self.editor || self.pointer_shown_at.is_some() {
+        if self.splash || self.menu || self.editor || self.pointer_hidden || self.pointer_shown_at.is_some() {
             return;
         }
         let (black, white) = (self.px((0, 0, 0)), self.px((255, 255, 255)));
@@ -964,6 +967,25 @@ impl Console {
             p.apply(dx, dy, buttons);
         }
         self.pointer_paint();
+    }
+
+    /// Shows the pointer at (`x`, `y`) in console coordinates (the desktop routes the mouse here while the
+    /// pointer is over this console).
+    pub fn pointer_place(&mut self, x: i32, y: i32, buttons: u8) {
+        self.pointer_erase();
+        let mut p = self.pointer.unwrap_or_else(|| Pointer::new(self.width, self.height));
+        p.x = x.clamp(0, self.width as i32 - 1);
+        p.y = y.clamp(0, self.height as i32 - 1);
+        p.buttons = buttons & 0x07;
+        self.pointer = Some(p);
+        self.pointer_hidden = false;
+        self.pointer_paint();
+    }
+
+    /// Removes the pointer from this console until [`Console::pointer_place`] (it is elsewhere on the desktop).
+    pub fn pointer_hide(&mut self) {
+        self.pointer_erase();
+        self.pointer_hidden = true;
     }
 
     /// Where the pointer is and which buttons are down, once a mouse has been used.

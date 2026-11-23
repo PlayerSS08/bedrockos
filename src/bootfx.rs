@@ -13,7 +13,8 @@ use crate::anim::{self, Smoother};
 use crate::arch;
 use crate::bootinfo::FbInfo;
 use crate::bootscene::{Dirty, MenuView, Scene, View};
-use crate::desktop::{self, DeskLayout};
+use crate::desktop::{self, DeskLayout, Zone};
+use crate::pointer::{self, Pointer, Texel};
 use crate::fb::Console;
 use crate::global::Global;
 use crate::gui::canvas::{Canvas, Rect};
@@ -49,6 +50,10 @@ struct State {
     desk: Option<DeskLayout>,
     /// Minute shown by the panel clock (to redraw only when it changes).
     clock_min: u32,
+    /// The mouse pointer on the desktop (screen coordinates), once a mouse has moved.
+    dp: Option<Pointer>,
+    /// Where the desktop last painted the pointer (None while the console shows it).
+    dp_shown: Option<(i32, i32)>,
 }
 
 static STATE: Global<State> = Global::new(State {
@@ -66,6 +71,8 @@ static STATE: Global<State> = Global::new(State {
     frames: 0,
     desk: None,
     clock_min: u32::MAX,
+    dp: None,
+    dp_shown: None,
 });
 
 fn state() -> &'static mut State {
@@ -271,6 +278,10 @@ fn clock_now(buf: &mut [u8; 28]) -> &str {
 /// Keeps the panel clock current; cheap to call often (redraws only when the minute changes). Called by the
 /// status task, the only caller once the desktop is up.
 pub fn panel_tick() {
+    arch::without_interrupts(panel_tick_inner);
+}
+
+fn panel_tick_inner() {
     let s = state();
     let (Some(l), Some(fb)) = (s.desk, s.fb) else { return };
     let min = crate::rtc::now().map_or(0, |t| u32::from(t.hour) * 60 + u32::from(t.min));
@@ -288,6 +299,89 @@ pub fn panel_tick() {
         desktop::draw_clock(&mut c, &l, clock);
     }
     blit(&fb, &back[..w * h], w, l.clock);
+    // The clock area was copied over the pointer: paint it again.
+    if let Some((x, y)) = s.dp_shown {
+        if !l.clock.intersect(&Rect::new(x, y, pointer::SPRITE_W as i32, pointer::SPRITE_H as i32)).is_empty() {
+            sprite(&fb, &l, x, y);
+        }
+    }
+}
+
+/// True once the desktop is on screen (the mouse then goes to [`desk_pointer`]).
+pub fn desktop_active() -> bool {
+    state().desk.is_some()
+}
+
+/// Moves the desktop pointer by a mouse movement. Over the terminal text the console draws it (so text
+/// redraws keep it intact); everywhere else the desktop does, restoring what was under it from the back
+/// buffer, which holds the desktop picture.
+pub fn desk_pointer(dx: i32, dy: i32, buttons: u8) {
+    arch::without_interrupts(|| {
+        let s = state();
+        let (Some(l), Some(fb)) = (s.desk, s.fb) else { return };
+        let p = s.dp.get_or_insert_with(|| Pointer::new(fb.width, fb.height));
+        p.apply(dx, dy, buttons);
+        let (x, y) = (p.x, p.y);
+        if let Some((ox, oy)) = s.dp_shown.take() {
+            unsprite(&fb, &l, ox, oy);
+        }
+        match l.zone(x, y) {
+            Zone::Terminal { x: cx, y: cy } => {
+                let _ = log::with_console(|c| c.pointer_place(cx, cy, buttons));
+            }
+            Zone::Desktop => {
+                let _ = log::with_console(|c| c.pointer_hide());
+                sprite(&fb, &l, x, y);
+                s.dp_shown = Some((x, y));
+            }
+        }
+    });
+}
+
+/// Paints the arrow at (`x`, `y`) on the framebuffer, except over the terminal text (the console's).
+fn sprite(fb: &FbInfo, l: &DeskLayout, x: i32, y: i32) {
+    for sy in 0..pointer::SPRITE_H {
+        for sx in 0..pointer::SPRITE_W {
+            let c = match pointer::sprite_texel(sx, sy) {
+                Texel::Clear => continue,
+                Texel::Outline => 0x000000,
+                Texel::Fill => 0xFFFFFF,
+            };
+            let (px, py) = (x + sx as i32, y + sy as i32);
+            if desktop::desktop_owns(l, px, py) {
+                put_px(fb, px as usize, py as usize, c);
+            }
+        }
+    }
+}
+
+/// Puts back the desktop pixels under an arrow painted by [`sprite`].
+fn unsprite(fb: &FbInfo, l: &DeskLayout, x: i32, y: i32) {
+    // SAFETY: after boot, BACK holds the desktop and is only used under `without_interrupts` here.
+    let back = unsafe { BACK.get() };
+    for sy in 0..pointer::SPRITE_H {
+        for sx in 0..pointer::SPRITE_W {
+            if pointer::sprite_texel(sx, sy) == Texel::Clear {
+                continue;
+            }
+            let (px, py) = (x + sx as i32, y + sy as i32);
+            if desktop::desktop_owns(l, px, py) {
+                put_px(fb, px as usize, py as usize, back[py as usize * fb.width + px as usize]);
+            }
+        }
+    }
+}
+
+fn put_px(fb: &FbInfo, x: usize, y: usize, c: u32) {
+    if x >= fb.width || y >= fb.height {
+        return;
+    }
+    let v = match fb.format {
+        PixelFormat::Bgr => c,
+        f => f.pack((c >> 16) as u8, (c >> 8) as u8, c as u8),
+    };
+    // SAFETY: (x, y) is inside the framebuffer (checked above), which is identity-mapped for the kernel.
+    unsafe { core::ptr::write_volatile((fb.base as *mut u32).add(y * fb.stride + x), v) };
 }
 
 /// Like `blit`, with every pixel scaled by `k` / 256 (fade in).

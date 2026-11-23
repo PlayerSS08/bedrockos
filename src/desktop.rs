@@ -50,6 +50,28 @@ impl DeskLayout {
     fn big(&self) -> bool {
         self.w >= 1600
     }
+
+    /// Who draws the pointer at screen position (`x`, `y`): the console (over the terminal text, with the
+    /// position in console coordinates) or the desktop (everywhere else).
+    pub fn zone(&self, x: i32, y: i32) -> Zone {
+        if self.term.contains(x, y) {
+            Zone::Terminal { x: x - self.term.x, y: y - self.term.y }
+        } else {
+            Zone::Desktop
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Zone {
+    Terminal { x: i32, y: i32 },
+    Desktop,
+}
+
+/// Whether the desktop may paint pointer pixel (`x`, `y`): on screen and outside the terminal text area,
+/// which belongs to the console.
+pub fn desktop_owns(l: &DeskLayout, x: i32, y: i32) -> bool {
+    x >= 0 && y >= 0 && x < l.w && y < l.h && !l.term.contains(x, y)
 }
 
 fn face(big: bool) -> &'static gfont::Face {
@@ -209,6 +231,19 @@ mod tests {
         }
         let differ = a.iter().zip(&b).filter(|(x, y)| x != y).count();
         assert!(differ < 50, "{differ} pixels differ");
+    }
+
+    #[test]
+    fn pointer_zones() {
+        let l = DeskLayout::new(1024, 768);
+        assert_eq!(l.zone(l.term.x, l.term.y), Zone::Terminal { x: 0, y: 0 });
+        assert_eq!(l.zone(l.term.x + 5, l.term.y + 7), Zone::Terminal { x: 5, y: 7 });
+        assert_eq!(l.zone(l.term.right(), l.term.y), Zone::Desktop, "right edge is outside");
+        assert_eq!(l.zone(10, 10), Zone::Desktop, "panel");
+        assert_eq!(l.zone(l.window.x + 30, l.window.y + 5), Zone::Desktop, "title bar");
+        assert!(desktop_owns(&l, 10, 10));
+        assert!(!desktop_owns(&l, l.term.x + 1, l.term.y + 1));
+        assert!(!desktop_owns(&l, -1, 5) && !desktop_owns(&l, 5, 768));
     }
 
     #[test]

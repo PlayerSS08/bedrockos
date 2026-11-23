@@ -35,7 +35,7 @@ Last update: 2026-11-23, milestone 3 (first part).
 | Panel clock | partial: shows **UTC** (no time zone setting yet), updates every minute | VirtualBox screenshot; minute change not watched |
 | Window manager: move, resize, focus, several windows | not done | rest of milestone 3 |
 | USB mouse in VirtualBox | done | Fixed the inherited xHCI driver: VirtualBox's USB mouse stalls SET_PROTOCOL and SET_IDLE; endpoint 0 is now reset after a stall and the mouse is used anyway. Checked: `USB mouse ready` in the log; movement injected with the VirtualBox COM API (`PutMouseEvent`) arrives as reports and moves the pointer (`mouse` command and screenshot) |
-| Mouse pointer | partial: works **inside the Terminal window only**; not on the panel or wallpaper. A small leftover pointer fragment can stay behind when text is drawn under the pointer (inherited console code) | VirtualBox, as above |
+| Mouse pointer on the whole desktop | done | VirtualBox: movement injected with `PutMouseEvent`; screenshots show the pointer inside the Terminal window (drawn by the console) and on the top panel (drawn by the desktop), with nothing left behind when it crosses between them. Clicks are read but do nothing yet. Inherited glitch: a small pointer fragment can stay behind when text is drawn under the pointer |
 | VirtualBox USB tablet (absolute pointer, the VirtualBox default) | not done: no tablet driver, so the scripts set the VM to a USB mouse (click into the VM window to capture it, Right Ctrl releases) | — |
 | Apps: Notes, Tasks, Browser, Wi-Fi, Settings | not done | milestones 4–10 |
 | Notes / tasks persistence | not done | milestone 5–6 |

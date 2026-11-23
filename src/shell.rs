@@ -3693,8 +3693,16 @@ pub extern "C" fn shell_task(_: usize) {
         // The laptop's own touchpad (I2C) moves it the same way; it is read at most every few milliseconds.
         while let Some(m) = crate::xhci::poll_mouse().or_else(crate::touchpad_hw::poll) {
             idle = false;
+            // On the desktop the pointer roams the whole screen; the desktop hands it to the console over the
+            // terminal text.
+            let on_desk = crate::bootfx::desktop_active();
+            if on_desk {
+                crate::bootfx::desk_pointer(m.dx, m.dy, m.buttons);
+            }
             log::with_console(|c| {
-                c.pointer_motion(m.dx, m.dy, m.buttons);
+                if !on_desk {
+                    c.pointer_motion(m.dx, m.dy, m.buttons);
+                }
                 let lines = (m.wheel.unsigned_abs() as usize).saturating_mul(3);
                 if m.wheel > 0 {
                     c.scroll_up(lines);
