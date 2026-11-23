@@ -51,6 +51,21 @@ impl DeskLayout {
         self.w >= 1600
     }
 
+    /// The title bar, where the window is grabbed to move it.
+    pub fn title_bar(&self) -> Rect {
+        Rect::new(self.window.x, self.window.y, self.window.w, self.title_h)
+    }
+
+    /// The same layout with the window's top-left corner moved to (`x`, `y`), kept fully on screen and below
+    /// the panel (the console inside it must stay within the framebuffer).
+    pub fn moved(&self, x: i32, y: i32) -> DeskLayout {
+        let x = x.clamp(0, (self.w - self.window.w).max(0));
+        let y = y.clamp(self.panel.bottom(), (self.h - self.window.h).max(self.panel.bottom()));
+        let (dx, dy) = (x - self.window.x, y - self.window.y);
+        let shift = |r: Rect| Rect::new(r.x + dx, r.y + dy, r.w, r.h);
+        DeskLayout { window: shift(self.window), body: shift(self.body), term: shift(self.term), ..*self }
+    }
+
     /// Who draws the pointer at screen position (`x`, `y`): the console (over the terminal text, with the
     /// position in console coordinates) or the desktop (everywhere else).
     pub fn zone(&self, x: i32, y: i32) -> Zone {
@@ -244,6 +259,22 @@ mod tests {
         assert!(desktop_owns(&l, 10, 10));
         assert!(!desktop_owns(&l, l.term.x + 1, l.term.y + 1));
         assert!(!desktop_owns(&l, -1, 5) && !desktop_owns(&l, 5, 768));
+    }
+
+    #[test]
+    fn moving_the_window_keeps_it_on_screen_and_carries_the_terminal() {
+        let l = DeskLayout::new(1024, 768);
+        let m = l.moved(l.window.x + 40, l.window.y + 30);
+        assert_eq!((m.window.x, m.window.y), (l.window.x + 40, l.window.y + 30));
+        assert_eq!((m.term.x - m.window.x, m.term.y - m.window.y), (l.term.x - l.window.x, l.term.y - l.window.y));
+        assert_eq!((m.term.w, m.term.h), (l.term.w, l.term.h), "same size");
+        let far = l.moved(5000, 5000);
+        assert_eq!(far.window.right(), 1024);
+        assert_eq!(far.window.bottom(), 768);
+        let up = l.moved(-50, -50);
+        assert_eq!((up.window.x, up.window.y), (0, l.panel.bottom()), "not over the panel");
+        assert!(l.title_bar().contains(l.window.x + 50, l.window.y + 5));
+        assert!(!l.title_bar().contains(l.term.x + 5, l.term.y + 5));
     }
 
     #[test]

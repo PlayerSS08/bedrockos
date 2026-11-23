@@ -54,6 +54,12 @@ struct State {
     dp: Option<Pointer>,
     /// Where the desktop last painted the pointer (None while the console shows it).
     dp_shown: Option<(i32, i32)>,
+    /// Buttons of the previous mouse event (to see presses and releases).
+    dp_buttons: u8,
+    /// While the window is being dragged: where it was grabbed, relative to its top-left corner.
+    drag: Option<(i32, i32)>,
+    /// When the window was last redrawn during a drag (TSC).
+    drag_drawn: u64,
 }
 
 static STATE: Global<State> = Global::new(State {
@@ -73,6 +79,9 @@ static STATE: Global<State> = Global::new(State {
     clock_min: u32::MAX,
     dp: None,
     dp_shown: None,
+    dp_buttons: 0,
+    drag: None,
+    drag_drawn: 0,
 });
 
 fn state() -> &'static mut State {
@@ -325,6 +334,28 @@ pub fn desk_pointer(dx: i32, dy: i32, buttons: u8) {
         if let Some((ox, oy)) = s.dp_shown.take() {
             unsprite(&fb, &l, ox, oy);
         }
+        // Left button: pressed on the title bar grabs the window; moving drags it; releasing drops it.
+        let (left, was_left) = (buttons & 1 != 0, s.dp_buttons & 1 != 0);
+        s.dp_buttons = buttons;
+        if left && !was_left && l.title_bar().contains(x, y) {
+            s.drag = Some((x - l.window.x, y - l.window.y));
+            s.drag_drawn = 0;
+        }
+        let mut l = l;
+        if let Some((gx, gy)) = s.drag {
+            // Redraw at most every 40 ms while dragging, and always on release, so the drop is exact.
+            if !left || us_since(s.drag_drawn) >= 40_000 {
+                let to = l.moved(x - gx, y - gy);
+                if to != l {
+                    move_window(&fb, to);
+                    l = to;
+                }
+                s.drag_drawn = arch::rdtsc();
+            }
+            if !left {
+                s.drag = None;
+            }
+        }
         match l.zone(x, y) {
             Zone::Terminal { x: cx, y: cy } => {
                 let _ = log::with_console(|c| c.pointer_place(cx, cy, buttons));
@@ -336,6 +367,26 @@ pub fn desk_pointer(dx: i32, dy: i32, buttons: u8) {
             }
         }
     });
+}
+
+/// Moves the Terminal window to `to`: redraws the desktop with the window there, then moves the console and
+/// lets it repaint its text from its history.
+fn move_window(fb: &FbInfo, to: DeskLayout) {
+    let (w, h) = (fb.width, fb.height);
+    let mut cbuf = [0u8; 28];
+    let clock = clock_now(&mut cbuf);
+    // SAFETY: after boot BACK holds the desktop and is only used under `without_interrupts` (caller).
+    let back = unsafe { BACK.get() };
+    {
+        let Some(mut c) = Canvas::new(&mut back[..w * h], w, h, w) else { return };
+        desktop::draw(&mut c, &to, clock);
+    }
+    blit(fb, &back[..w * h], w, Rect::new(0, 0, w as i32, h as i32));
+    let t = to.term;
+    let base = fb.base + ((t.y as usize * fb.stride + t.x as usize) * 4) as u64;
+    // SAFETY: `DeskLayout::moved` keeps the window, and so the terminal rectangle, inside the screen.
+    let _ = log::with_console(|c| unsafe { c.relocate(base) });
+    state().desk = Some(to);
 }
 
 /// Paints the arrow at (`x`, `y`) on the framebuffer, except over the terminal text (the console's).

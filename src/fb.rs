@@ -120,6 +120,9 @@ pub struct Console {
     pointer_shown_at: Option<(i32, i32)>,
     /// The desktop has the pointer outside this console: do not paint it.
     pointer_hidden: bool,
+    /// The last status-bar text, to repaint it after the console moves.
+    status_text: [u8; MAX_COLS],
+    status_len: usize,
 }
 
 impl Console {
@@ -178,6 +181,8 @@ impl Console {
             pointer_saved: [0; pointer::SPRITE_W * pointer::SPRITE_H],
             pointer_shown_at: None,
             pointer_hidden: false,
+            status_text: [0; MAX_COLS],
+            status_len: 0,
         };
         c.logo_row = rows.saturating_sub(logo_rows) / 3;
         // Put the log below the logo when the screen is big enough to keep a useful log area.
@@ -893,6 +898,9 @@ impl Console {
 
     /// Repaints the bottom row with `text` (clipped or padded to the screen width).
     pub fn status(&mut self, text: &[u8]) {
+        let n = text.len().min(MAX_COLS);
+        self.status_text[..n].copy_from_slice(&text[..n]);
+        self.status_len = n;
         if self.editor {
             return; // the editor's help line is on that row
         }
@@ -980,6 +988,21 @@ impl Console {
         self.pointer = Some(p);
         self.pointer_hidden = false;
         self.pointer_paint();
+    }
+
+    /// Moves the console to another place in the framebuffer (its window was dragged) and repaints the log
+    /// and the status bar there. The old place is not touched: the caller has already drawn over it.
+    ///
+    /// # Safety
+    /// `base` must point into the same framebuffer so that `width` x `height` pixels with the current stride
+    /// lie inside it (as for [`Console::new`]).
+    pub unsafe fn relocate(&mut self, base: u64) {
+        // Whatever was under the pointer belongs to the old place: forget it rather than restore it.
+        self.pointer_shown_at = None;
+        self.base = base as *mut u32;
+        self.redraw_log();
+        let (text, n) = (self.status_text, self.status_len);
+        self.status(&text[..n]);
     }
 
     /// Removes the pointer from this console until [`Console::pointer_place`] (it is elsewhere on the desktop).
