@@ -14,6 +14,32 @@ use crate::gui::math::{self, max, min, Rng};
 use crate::gui::theme::DARK;
 
 const MAX_STARS: usize = 160;
+
+/// The yellow splash lines, Minecraft title-screen style; one is picked at random each boot.
+pub const SPLASHES: [&str; 16] = [
+    "Now with Wi-Fi!",
+    "100% Rust!",
+    "Also try Linux!",
+    "Made from scratch!",
+    "Crafted, not downloaded!",
+    "No Java required!",
+    "Diamonds inside!",
+    "Bedrock is unbreakable!",
+    "Hello, Overworld!",
+    "Now with a browser!",
+    "Creeper-free!",
+    "Type neofetch!",
+    "Achievement get!",
+    "Boots in seconds!",
+    "Built in one night!",
+    "Mine it, craft it!",
+];
+/// Size of the splash text's coverage mask.
+const SPLASH_W: usize = 420;
+const SPLASH_H: usize = 40;
+/// Tilt of the splash: 20 degrees, as cos and sin in 1/256.
+const SPLASH_COS: i32 = 241;
+const SPLASH_SIN: i32 = 88;
 pub const MAX_DIRTY: usize = MAX_STARS + 8;
 pub const MAX_MENU_ITEMS: usize = 8;
 
@@ -227,6 +253,10 @@ pub struct Scene {
     menu_key: u64,
     hint_was: bool,
     login_was: bool,
+    /// The splash text drawn once (bold) as coverage, its size, and where it goes.
+    splash_mask: [u8; SPLASH_W * SPLASH_H],
+    splash_size: (i32, i32),
+    pub splash: &'static str,
 }
 
 /// FNV-1a over what the menu card shows, except the countdown ring.
@@ -280,7 +310,11 @@ impl Scene {
             menu_key: 0,
             hint_was: false,
             login_was: false,
+            splash_mask: [0; SPLASH_W * SPLASH_H],
+            splash_size: (0, 0),
+            splash: SPLASHES[(seed % SPLASHES.len() as u64) as usize],
         };
+        sc.render_splash();
         for i in 0..n {
             sc.star_boxes[i] = sc.star_box(i);
         }
@@ -294,6 +328,85 @@ impl Scene {
         if px.len() >= w * h {
             self.bg = Some(px);
         }
+    }
+
+    /// Draws the splash text into its mask (bold: twice, one pixel apart).
+    fn render_splash(&mut self) {
+        let f = &gfont::SANS_24;
+        self.splash_mask = [0; SPLASH_W * SPLASH_H];
+        let base = f.ascent as i32 + 4;
+        let mut pen = 4;
+        for ch in self.splash.chars() {
+            let g = gfont::glyph(f, ch);
+            for bold in 0..2 {
+                for row in 0..g.h as i32 {
+                    for col in 0..g.w as i32 {
+                        let (x, y) = (pen + g.left as i32 + col + bold, base - g.top as i32 + row);
+                        if (0..SPLASH_W as i32).contains(&x) && (0..SPLASH_H as i32).contains(&y) {
+                            let m = &mut self.splash_mask[y as usize * SPLASH_W + x as usize];
+                            *m = (*m).max(g.cov[(row * g.w as i32 + col) as usize]);
+                        }
+                    }
+                }
+            }
+            pen += g.advance as i32;
+        }
+        self.splash_size = ((pen + 6).min(SPLASH_W as i32), (f.height as i32 + 8).min(SPLASH_H as i32));
+    }
+
+    /// Centre of the splash (right of the wordmark, a little above it) and the box it can cover while pulsing.
+    pub fn splash_box(&self) -> (i32, i32, Rect) {
+        let l = &self.layout;
+        let ww = canvas::text_width(&gfont::WORDMARK, "BEDROCKOS", word_tracking(l.w as usize));
+        let (tw, th) = self.splash_size;
+        let cx = (l.w / 2 + ww / 2 + 60).min(l.w - 200);
+        let cy = l.word_y - 6;
+        // Rotated half extents, plus 12 % for the pulse and the shadow.
+        let hw = (tw * SPLASH_COS + th * SPLASH_SIN) / 256 / 2 * 112 / 100 + 4;
+        let hh = (tw * SPLASH_SIN + th * SPLASH_COS) / 256 / 2 * 112 / 100 + 4;
+        (cx, cy, Rect::new(cx - hw, cy - hh, 2 * hw, 2 * hh))
+    }
+
+    /// The splash text: yellow with a dark shadow, tilted, its size pulsing a little (like Minecraft's).
+    fn paint_splash(&self, c: &mut Canvas, v: &View, t: f32) {
+        let (cx, cy, bx) = self.splash_box();
+        let (tw, th) = self.splash_size;
+        // Size: 1.0 .. 1.08 and back, twice a second.
+        let k = math::sin((t % 1.0) * math::TAU * 0.5).abs();
+        let scale = (256.0 * (1.0 + 0.08 * k)) as i32;
+        let a256 = canvas::unit256(v.intro * v.fade.clamp(0.0, 1.0));
+        let mask = &self.splash_mask;
+        let (mcx, mcy) = (tw * 128, th * 128); // mask centre in 1/256 px
+        // Coverage (0..=255) at the screen offset (dx, dy) from the centre, bilinear.
+        let sample = |dx: i32, dy: i32| -> u32 {
+            let u = (dx * SPLASH_COS - dy * SPLASH_SIN) * 256 / scale + mcx;
+            let w = (dx * SPLASH_SIN + dy * SPLASH_COS) * 256 / scale + mcy;
+            if u < 0 || w < 0 {
+                return 0;
+            }
+            let (x0, y0) = ((u >> 8) as usize, (w >> 8) as usize);
+            if x0 + 1 >= tw as usize || y0 + 1 >= th as usize {
+                return 0;
+            }
+            let (fx, fy) = ((u & 255) as u32, (w & 255) as u32);
+            let p = |x: usize, y: usize| u32::from(mask[y * SPLASH_W + x]);
+            let top = p(x0, y0) * (256 - fx) + p(x0 + 1, y0) * fx;
+            let bot = p(x0, y0 + 1) * (256 - fx) + p(x0 + 1, y0 + 1) * fx;
+            (top * (256 - fy) + bot * fy) >> 16
+        };
+        c.shade(bx, |px, py, old| {
+            let (dx, dy) = (px - cx, py - cy);
+            let sh = (sample(dx - 2, dy - 2) * a256) >> 8;
+            let fg = (sample(dx, dy) * a256) >> 8;
+            let mut col = old;
+            if sh > 0 {
+                col = canvas::mix256(col, rgb(63, 63, 0), sh + (sh >> 7));
+            }
+            if fg > 0 {
+                col = canvas::mix256(col, rgb(255, 255, 0), fg + (fg >> 7));
+            }
+            col
+        });
     }
 
     pub fn set_menu_items(&mut self, items: usize) {
@@ -352,6 +465,7 @@ impl Scene {
             dirty.add(c.bounds());
         } else {
             dirty.add(self.layout.logo_box);
+            dirty.add(self.splash_box().2);
             if v.show_bar && !menu_shown {
                 dirty.add(self.layout.bar_box);
             }
@@ -429,6 +543,9 @@ impl Scene {
         let l = &self.layout;
         if !l.logo_box.intersect(&r).is_empty() {
             self.paint_logo(c, v, t);
+        }
+        if !self.splash_box().2.intersect(&r).is_empty() {
+            self.paint_splash(c, v, t);
         }
         if v.show_bar && v.menu.is_none() && v.login.is_none() && !l.bar_box.intersect(&r).is_empty() {
             self.paint_bar(c, v, t);
