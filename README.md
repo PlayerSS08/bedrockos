@@ -12,7 +12,10 @@ not.** It boots in VirtualBox with an animated boot screen and boot menu, then f
 - **ChatBox**, the shell: more than 100 commands (`help`, `cmds`), pipes, redirects and /bin programs;
 - **Notes** (undo/redo, find, rename, line copy/paste, `.txt` import/export), **Tasks**, **Help**, and
   **Settings** (about, network, live system and task view, display);
-- **Files**, **Network**, **Calculator**, **Clock** (world clocks, stopwatch) and **Snake**, all in the dock;
+- **Files**, **Network**, **Calculator**, **Clock** (world clocks, stopwatch), **Snake** and the **Crafting Table**
+  web browser, all in the dock;
+- Wi-Fi through the laptop (`wifi scan`, `wifi connect`) and https pages for the browser: run
+  `python tools/bedrock-host.py` on the laptop while the VM runs;
 - a **command palette** (Ctrl+Space) that opens apps or runs commands;
 - networking through the laptop's connection (`nettest` checks link, address, gateway, DNS and HTTP);
 - files, notes and tasks saved to the VM disk (or a USB stick), so they survive a reboot.

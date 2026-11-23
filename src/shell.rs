@@ -1169,6 +1169,48 @@ fn speedtest_one(url: &str) -> bool {
     }
 }
 
+/// Port of the laptop helper's page fetcher (`tools/bedrock-host.py`), reached at 10.0.2.2 through NAT.
+const HELPER_WEB: &str = "http://10.0.2.2:8086/fetch?u=";
+const MAX_PAGE: usize = 2 * 1024 * 1024;
+
+/// Fetches a page for the browser: through the laptop helper when it runs (it can do https://), otherwise
+/// http:// pages directly. Returns the final address and the HTML.
+fn browser_fetch(url: &str) -> Result<(String, String), String> {
+    if !crate::netdev::link_up() {
+        return Err(String::from("no network connection (`ifconfig` shows what is up)"));
+    }
+    let mut quiet = |_: usize, _: Option<usize>| {};
+    let mut enc = String::new();
+    for b in url.bytes() {
+        match b {
+            b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => enc.push(b as char),
+            _ => enc.push_str(&alloc::format!("%{b:02X}")),
+        }
+    }
+    match crate::netstack::http_fetch(&alloc::format!("{HELPER_WEB}{enc}"), MAX_PAGE, &mut quiet) {
+        Ok(r) => {
+            let body = String::from_utf8_lossy(&r.body).into_owned();
+            if r.status != 200 {
+                return Err(body);
+            }
+            let fin = r
+                .headers
+                .lines()
+                .find_map(|l| l.split_once(':').filter(|(k, _)| k.trim().eq_ignore_ascii_case("x-final-url")).map(|(_, v)| String::from(v.trim())))
+                .unwrap_or_default();
+            Ok((fin, body))
+        }
+        Err(_) if url.starts_with("http://") => {
+            let r = crate::netstack::http_fetch(url, MAX_PAGE, &mut quiet)?;
+            Ok((String::new(), String::from_utf8_lossy(&r.body).into_owned()))
+        }
+        Err(_) => Err(String::from(
+            "https:// pages need encryption (TLS), which BedrockOS does not have. Start the helper on the laptop \
+             (python tools/bedrock-host.py) and it fetches them for Crafting Table; http:// pages work without it.",
+        )),
+    }
+}
+
 fn cmd_curl(rest: &str) {
     let mut url = None;
     let mut output = None;
@@ -4140,6 +4182,12 @@ pub extern "C" fn shell_task(_: usize) {
     out!("\nBedrockOS shell. Type `help`.\n{}", prompt());
     loop {
         let mut idle = true;
+        // A page the Crafting Table browser asked for.
+        if let Some(u) = crate::bootfx::take_browser_request() {
+            let r = browser_fetch(&u);
+            crate::bootfx::browser_loaded(&u, r);
+            idle = false;
+        }
         // A USB mouse moves the pointer; the wheel scrolls the log (three lines a notch, up = older lines).
         // The laptop's own touchpad (I2C) moves it the same way; it is read at most every few milliseconds.
         while let Some(m) = crate::xhci::poll_mouse().or_else(crate::touchpad_hw::poll) {

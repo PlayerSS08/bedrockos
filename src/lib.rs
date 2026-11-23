@@ -34,6 +34,7 @@ pub mod bootscene;
 pub mod desktop;
 pub mod apps;
 pub mod apps2;
+pub mod browser;
 pub mod battery;
 pub mod calc;
 pub mod tz;

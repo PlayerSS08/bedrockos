@@ -264,7 +264,7 @@ pub mod link {
 
     fn scan_inner(out: &mut [Net; MAX_NETS]) -> Result<usize, Msg> {
         if !hello_inner() {
-            return Err(Msg::new(b"no Wi-Fi driver yet (milestone 8); online via the laptop connection: try ip, ping, curl"));
+            return Err(Msg::new(b"no helper: run `python tools/bedrock-host.py` on the laptop, then try again"));
         }
         if !send(&[b"SCAN"]) {
             return Err(Msg::new(b"could not talk to the Wi-Fi helper"));

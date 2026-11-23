@@ -15,7 +15,8 @@ use crate::bootinfo::FbInfo;
 use crate::bootscene::{Dirty, MenuView, Scene, View};
 use crate::apps::{parse_tasks, Effect, Fonts, Help, Notes, Palette, Pick, Settings, Tasks, NOTES_DIR, TASKS_FILE};
 use crate::apps2::{Calculator, Clock, Files, FilesReq, Snake};
-use crate::desktop::{self, DeskLayout, APPS, CALC, CHATBOX, CLOCK, FILES, HELP, NETWORK, NOTES, SETTINGS, SNAKE, TASKS};
+use crate::browser::Browser;
+use crate::desktop::{self, DeskLayout, APPS, BROWSER, CALC, CHATBOX, CLOCK, FILES, HELP, NETWORK, NOTES, SETTINGS, SNAKE, TASKS};
 use crate::keymap::Key;
 use crate::wm::Wm;
 use alloc::format;
@@ -273,6 +274,7 @@ struct Desk {
     help: Help,
     settings: Settings,
     files: Files,
+    browser: Browser,
     calc: Calculator,
     clock: Clock,
     snake: Snake,
@@ -355,6 +357,7 @@ fn enter_desktop() -> bool {
             help: Help::new(),
             settings: Settings::default(),
             files: Files::default(),
+            browser: Browser::default(),
             calc: Calculator::default(),
             clock: Clock::default(),
             snake: Snake::default(),
@@ -519,6 +522,7 @@ fn compose(d: &mut Desk, fb: &FbInfo, r: Rect) {
                 HELP => d.help.draw(&mut c, body, &f, on_top),
                 SETTINGS => d.settings.draw(&mut c, body, &f, &settings_lines(d.settings.page, fb)),
                 FILES => d.files.draw(&mut c, body, &f),
+                BROWSER => d.browser.draw(&mut c, body, &f),
                 NETWORK => crate::apps2::draw_network(&mut c, body, &f, crate::netdev::link_up(), &settings_lines(1, fb)[1..]),
                 CALC => d.calc.draw(&mut c, body, &f),
                 CLOCK => {
@@ -1078,6 +1082,11 @@ fn press(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
             TASKS => d.tasks.as_mut().map_or(Effect::None, |t| t.click(body, &f, x, y)),
             SETTINGS => d.settings.click(body, &f, x, y),
             CALC => d.calc.click(body, x, y),
+            BROWSER => {
+                let e = d.browser.click(body, x, y);
+                browser_req(d);
+                e
+            }
             FILES => {
                 let (e, req) = d.files.click(body, &f, x, y);
                 files_req(d, req);
@@ -1128,11 +1137,42 @@ fn after_effect(d: &mut Desk, fb: &FbInfo, app: usize, e: Effect) {
 /// in front).
 /// Opens (and focuses) the desktop app named `name` (case-insensitive, as in the dock). For `open`.
 pub fn open_named(name: &str) -> Result<(), &'static str> {
-    let app = desktop::APPS.iter().position(|(n, m)| m.is_none() && n.eq_ignore_ascii_case(name)).ok_or("no such app")?;
+    let app = match name.to_ascii_lowercase().as_str() {
+        "browser" | "crafting" | "craftingtable" | "web" => BROWSER,
+        _ => desktop::APPS.iter().position(|(n, m)| m.is_none() && n.eq_ignore_ascii_case(name)).ok_or("no such app")?,
+    };
     arch::without_interrupts(|| {
         let (Some(d), Some(fb)) = (desk(), state().fb) else { return Err("the desktop is not shown") };
         open_app(d, &fb, app);
         Ok(())
+    })
+}
+
+/// A page the browser wants; the shell task fetches it (networking cannot run with interrupts off).
+static BROWSER_REQ: Global<Option<String>> = Global::new(None);
+
+fn browser_req(d: &mut Desk) {
+    if let Some(u) = d.browser.pending.take() {
+        // SAFETY: BROWSER_REQ is only touched with interrupts off (here and in `take_browser_request`).
+        *unsafe { BROWSER_REQ.get() } = Some(u);
+    }
+}
+
+/// The page the browser is waiting for, if any (called by the shell task).
+pub fn take_browser_request() -> Option<String> {
+    // SAFETY: see `browser_req`.
+    arch::without_interrupts(|| unsafe { BROWSER_REQ.get() }.take())
+}
+
+/// Hands a fetched page (final address and HTML) or an error to the browser and redraws it.
+pub fn browser_loaded(url: &str, result: Result<(String, String), String>) {
+    arch::without_interrupts(|| {
+        let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
+        d.browser.loaded(url, result);
+        if d.wm.is_open(BROWSER) {
+            let r = desktop::app_body(d.wm.rect(BROWSER), d.l.title_h);
+            redraw(d, &fb, r);
+        }
     })
 }
 
@@ -1217,6 +1257,11 @@ pub fn desk_key(k: Key) -> bool {
             HELP => d.help.key(k),
             SETTINGS => d.settings.key(k),
             CALC => d.calc.key(k),
+            BROWSER => {
+                let e = d.browser.key(k);
+                browser_req(d);
+                e
+            }
             CLOCK => d.clock.key(k, log::uptime_us()),
             SNAKE => d.snake.key(k),
             FILES => {

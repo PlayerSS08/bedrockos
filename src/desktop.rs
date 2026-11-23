@@ -37,9 +37,10 @@ pub struct DeskLayout {
 }
 
 /// The apps of the dock, in order, and the milestone that builds each one (`None` = available now).
-pub const APPS: [(&str, Option<u8>); 10] = [
+pub const APPS: [(&str, Option<u8>); 11] = [
     ("Notes", None),
     ("Tasks", None),
+    ("Crafting Table", None),
     ("Files", None),
     ("ChatBox", None),
     ("Network", None),
@@ -53,14 +54,15 @@ pub const APPS: [(&str, Option<u8>); 10] = [
 /// Indexes into [`APPS`]. ChatBox is the window holding the shell.
 pub const NOTES: usize = 0;
 pub const TASKS: usize = 1;
-pub const CHATBOX: usize = 3;
-pub const FILES: usize = 2;
-pub const NETWORK: usize = 4;
-pub const CALC: usize = 5;
-pub const CLOCK: usize = 6;
-pub const SNAKE: usize = 7;
-pub const SETTINGS: usize = 8;
-pub const HELP: usize = 9;
+pub const BROWSER: usize = 2;
+pub const FILES: usize = 3;
+pub const CHATBOX: usize = 4;
+pub const NETWORK: usize = 5;
+pub const CALC: usize = 6;
+pub const CLOCK: usize = 7;
+pub const SNAKE: usize = 8;
+pub const SETTINGS: usize = 9;
+pub const HELP: usize = 10;
 
 /// The title bar of a window at `win` with title-bar height `th`.
 pub fn title_bar(win: Rect, th: i32) -> Rect {
@@ -346,6 +348,11 @@ pub fn draw_dock(c: &mut Canvas, l: &DeskLayout, open: &[bool; APPS.len()]) {
 
 /// One app icon, drawn from shapes on a coloured rounded tile.
 fn icon(c: &mut Canvas, t: Rect, app: usize) {
+    if app == BROWSER {
+        // The crafting table picture itself (assets/browser.png), no tile.
+        draw_rgba_scaled(c, BROWSER_ICON, t.x, t.y, t.w);
+        return;
+    }
     let (x, y, s) = (t.x as f32, t.y as f32, t.w as f32);
     let (top, bottom) = match app {
         NOTES => (rgb(255, 214, 102), rgb(240, 170, 60)),
@@ -536,6 +543,43 @@ fn cross(c: &mut Canvas, cx: i32, cy: i32, r: i32, col: Color) {
                 _ => continue,
             };
             c.blend256(cx + dx, cy + dy, col, a);
+        }
+    }
+}
+
+/// The Crafting Table icon, 128x128 RGBA made by `tools/genbrowser.py` from `assets/browser.png`.
+static BROWSER_ICON: &[u8] = include_bytes!("gui/browsericon.bin");
+
+/// Draws a "BRIC" RGBA picture scaled to `size` x `size` at (`x`, `y`), averaging the source pixels under each
+/// screen pixel (sharp and smooth for downscaling).
+fn draw_rgba_scaled(c: &mut Canvas, data: &[u8], x: i32, y: i32, size: i32) {
+    if data.len() < 8 || &data[..4] != b"BRIC" || size <= 0 {
+        return;
+    }
+    let sw = u16::from_le_bytes([data[4], data[5]]) as i32;
+    let sh = u16::from_le_bytes([data[6], data[7]]) as i32;
+    let Some(px) = data.get(8..8 + (sw * sh * 4) as usize) else { return };
+    for j in 0..size {
+        let (y0, y1) = (j * sh / size, ((j + 1) * sh / size).max(j * sh / size + 1));
+        for i in 0..size {
+            let (x0, x1) = (i * sw / size, ((i + 1) * sw / size).max(i * sw / size + 1));
+            let (mut r, mut g, mut b, mut a, mut n) = (0u32, 0u32, 0u32, 0u32, 0u32);
+            for sy in y0..y1.min(sh) {
+                for sx in x0..x1.min(sw) {
+                    let k = ((sy * sw + sx) * 4) as usize;
+                    let al = u32::from(px[k + 3]);
+                    r += u32::from(px[k]) * al;
+                    g += u32::from(px[k + 1]) * al;
+                    b += u32::from(px[k + 2]) * al;
+                    a += al;
+                    n += 1;
+                }
+            }
+            if a == 0 || n == 0 {
+                continue;
+            }
+            let col = rgb((r / a) as u8, (g / a) as u8, (b / a) as u8);
+            c.blend256(x + i, y + j, col, (a / n * 257) >> 8);
         }
     }
 }
