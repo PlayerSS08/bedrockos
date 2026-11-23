@@ -14,7 +14,8 @@ use crate::arch;
 use crate::bootinfo::FbInfo;
 use crate::bootscene::{Dirty, MenuView, Scene, View};
 use crate::apps::{parse_tasks, Effect, Fonts, Help, Notes, Palette, Pick, Settings, Tasks, NOTES_DIR, TASKS_FILE};
-use crate::desktop::{self, DeskLayout, APPS, CHATBOX, HELP, NOTES, SETTINGS, TASKS};
+use crate::apps2::{Calculator, Clock, Files, FilesReq, Snake};
+use crate::desktop::{self, DeskLayout, APPS, CALC, CHATBOX, CLOCK, FILES, HELP, NETWORK, NOTES, SETTINGS, SNAKE, TASKS};
 use crate::keymap::Key;
 use crate::wm::Wm;
 use alloc::format;
@@ -242,6 +243,15 @@ struct Desk {
     tasks: Option<Tasks>,
     help: Help,
     settings: Settings,
+    files: Files,
+    calc: Calculator,
+    clock: Clock,
+    snake: Snake,
+    /// Last Snake step and last stopwatch redraw (TSC).
+    snake_at: u64,
+    watch_at: u64,
+    /// The hover tip shown under the top bar: which spot (0 network, 1 battery, 2 clock) and where it is.
+    tip: Option<(usize, Rect)>,
     /// The command palette, while open (Ctrl+Space).
     palette: Option<Palette>,
     /// Size of each maximised window before it was maximised.
@@ -312,8 +322,15 @@ fn enter_desktop() -> bool {
             tasks: None,
             help: Help::new(),
             settings: Settings::default(),
+            files: Files::default(),
+            calc: Calculator::default(),
+            clock: Clock::default(),
+            snake: Snake::default(),
+            snake_at: 0,
+            watch_at: 0,
             maxed: [None; crate::wm::N],
             palette: None,
+            tip: None,
             settings_at: 0,
             msg: String::new(),
             msg_at: None,
@@ -351,8 +368,8 @@ fn enter_desktop() -> bool {
 }
 
 fn clock_now(buf: &mut [u8; 28]) -> &str {
-    match crate::rtc::now() {
-        Some(t) => desktop::clock_text(buf, t.weekday_name(), t.day, t.month_name(), t.hour, t.min),
+    match crate::tz::local_now() {
+        Some(t) => desktop::clock_text(buf, t.weekday_name(), t.day, t.month_name(), t.hour, t.min, &crate::tz::names(crate::tz::offset()).0),
         None => "--:--",
     }
 }
@@ -402,6 +419,15 @@ fn compose(d: &mut Desk, fb: &FbInfo, r: Rect) {
                 }
                 HELP => d.help.draw(&mut c, body, &f, on_top),
                 SETTINGS => d.settings.draw(&mut c, body, &f, &settings_lines(d.settings.page, fb)),
+                FILES => d.files.draw(&mut c, body, &f),
+                NETWORK => crate::apps2::draw_network(&mut c, body, &f, crate::netdev::link_up(), &settings_lines(1, fb)[1..]),
+                CALC => d.calc.draw(&mut c, body, &f),
+                CLOCK => {
+                    let utc = crate::rtc::now().map_or(0, |t| t.unix_seconds());
+                    let zone = crate::tz::names(crate::tz::offset()).0;
+                    d.clock.draw(&mut c, body, &f, (utc, crate::tz::offset(), &zone), log::uptime_us());
+                }
+                SNAKE => d.snake.draw(&mut c, body, &f),
                 _ => {}
             }
         }
@@ -410,6 +436,10 @@ fn compose(d: &mut Desk, fb: &FbInfo, r: Rect) {
     if let Some(p) = d.palette.as_ref() {
         let pr = Palette::rect(w as i32, d.l.panel.h, &f);
         p.draw(&mut c, pr, &f);
+    }
+    if let Some((kind, _)) = d.tip {
+        let (lines, tr) = tip_for(d, kind);
+        desktop::draw_tip(&mut c, &d.l, tr, &lines);
     }
     let mut open = [false; APPS.len()];
     for &a in d.wm.order() {
@@ -463,11 +493,27 @@ pub fn desk_tick() {
             let r = d.l.clock;
             redraw(d, &fb, r);
         }
-        // The Settings window shows live values (uptime, memory, tasks): refresh it every second.
-        if d.wm.is_open(SETTINGS) && us_since(d.settings_at) >= 1_000_000 {
-            d.settings_at = arch::rdtsc();
-            let r = desktop::app_body(d.wm.rect(SETTINGS), d.l.title_h);
+        // Snake steps every 110 ms while its window is in front; a running stopwatch redraws 10 times a second.
+        if d.wm.focused() == Some(SNAKE) && us_since(d.snake_at) >= 110_000 {
+            d.snake_at = arch::rdtsc();
+            if d.snake.tick() {
+                let r = desktop::app_body(d.wm.rect(SNAKE), d.l.title_h);
+                redraw(d, &fb, r);
+            }
+        }
+        if d.wm.is_open(CLOCK) && d.clock.running() && us_since(d.watch_at) >= 100_000 {
+            d.watch_at = arch::rdtsc();
+            let r = desktop::app_body(d.wm.rect(CLOCK), d.l.title_h);
             redraw(d, &fb, r);
+        }
+        // Every second: battery, hover tip, and the Settings window's live values (uptime, memory, tasks).
+        if us_since(d.settings_at) >= 1_000_000 {
+            d.settings_at = arch::rdtsc();
+            second_tick(d, &fb);
+            if d.wm.is_open(SETTINGS) {
+                let r = desktop::app_body(d.wm.rect(SETTINGS), d.l.title_h);
+                redraw(d, &fb, r);
+            }
         }
         if d.notes_dirty.is_some_and(|t| us_since(t) >= AUTOSAVE_US) {
             d.notes_dirty = None;
@@ -634,6 +680,15 @@ pub fn persist_done(only_in_memory: bool) {
 }
 
 /// The `task` command changed the task file: the Tasks window reads it again.
+/// Redraws the top bar (after the time zone changed).
+pub fn panel_refresh() {
+    arch::without_interrupts(|| {
+        let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
+        let r = d.l.panel;
+        redraw(d, &fb, r);
+    });
+}
+
 /// Saves the Notes window's edits now (before `note import` adds a file under /notes).
 pub fn notes_save_now() {
     arch::without_interrupts(|| {
@@ -686,6 +741,11 @@ fn set_message(d: &mut Desk, fb: &FbInfo, msg: &str) {
 fn open_app(d: &mut Desk, fb: &FbInfo, app: usize) {
     match app {
         NOTES if d.notes.is_none() => d.notes = Some(load_notes()),
+        FILES => {
+            let p = d.files.path.clone();
+            files_req(d, Some(FilesReq::List(p)));
+        }
+        SNAKE => d.snake.seed(arch::rdtsc()),
         TASKS if d.tasks.is_none() => d.tasks = Some(load_tasks()),
         _ => {}
     }
@@ -746,9 +806,135 @@ pub fn desk_pointer(dx: i32, dy: i32, buttons: u8) {
                 d.drag = None;
             }
         }
+        if d.drag.is_none() {
+            hover(d, &fb, x, y);
+        }
         sprite(&fb, x, y);
         state().dp_shown = Some((x, y));
     });
+}
+
+/// The lines of hover tip `kind` (0 network, 1 battery, 2 clock) and where the tip goes.
+fn tip_for(d: &Desk, kind: usize) -> (Vec<String>, Rect) {
+    let mut cbuf = [0u8; 28];
+    let clock = clock_now(&mut cbuf);
+    let spots = desktop::panel_spots(&d.l, clock);
+    let mut v = Vec::new();
+    match kind {
+        0 => {
+            let (ip, _, gw, _, _) = crate::netstack::get_config();
+            if crate::netdev::link_up() {
+                v.push(String::from("Connected through the laptop's network"));
+                v.push(format!("Address {}   gateway {}", ip, gw));
+            } else {
+                v.push(String::from("Not connected"));
+            }
+            v.push(String::from("`nettest` in ChatBox checks the connection"));
+        }
+        1 => match crate::battery::read() {
+            Some(b) => {
+                match b.percent {
+                    Some(p) => v.push(format!("Battery {}%", p)),
+                    None => v.push(String::from("No battery")),
+                }
+                v.push(String::from(match (b.on_ac, b.charging) {
+                    (true, true) => "Plugged in, charging",
+                    (true, false) => "Plugged in",
+                    (false, _) => "On battery",
+                }));
+                v.push(String::from("The laptop's battery, as VirtualBox reports it"));
+            }
+            None => {
+                v.push(String::from("Battery not known"));
+                v.push(String::from("This machine does not report a battery to BedrockOS"));
+            }
+        },
+        _ => {
+            let off = crate::tz::offset();
+            let (abbr, region) = crate::tz::names(off);
+            match crate::tz::local_now() {
+                Some(t) => {
+                    v.push(format!("{} {} {} {}", t.weekday_name(), t.day, t.month_name(), t.year));
+                    v.push(format!("{:02}:{:02}:{:02} {}", t.hour, t.min, t.sec, abbr));
+                }
+                None => v.push(String::from("The clock cannot be read")),
+            }
+            v.push(format!("Time zone: {} ({})", region, crate::tz::utc_text(off)));
+            if let Some(u) = crate::rtc::now() {
+                v.push(format!("UTC {:02}:{:02}   (change the zone with `tz` in ChatBox)", u.hour, u.min));
+            }
+        }
+    }
+    let r = desktop::tip_rect(&d.l, spots[kind], &v);
+    (v, r)
+}
+
+/// Shows or hides the hover tip as the pointer enters or leaves a top-bar spot.
+fn hover(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
+    let mut cbuf = [0u8; 28];
+    let clock = clock_now(&mut cbuf);
+    let kind = desktop::panel_spots(&d.l, clock).iter().position(|r| r.inflate(4).contains(x, y));
+    if kind == d.tip.map(|t| t.0) {
+        return;
+    }
+    if let Some((_, old)) = d.tip.take() {
+        redraw(d, fb, old.inflate(desktop::SHADOW / 2));
+    }
+    if let Some(k) = kind {
+        let r = tip_for(d, k).1;
+        d.tip = Some((k, r));
+        redraw(d, fb, r.inflate(desktop::SHADOW / 2));
+    }
+}
+
+/// Carries out what the Files window asked for: a folder listing (and the preview of the selected file),
+/// or deleting a file.
+fn files_req(d: &mut Desk, req: Option<FilesReq>) {
+    let fs = crate::shell::fs();
+    let path = match req {
+        Some(FilesReq::Delete(p)) => {
+            fs.remove(&p);
+            PERSIST.store(true, core::sync::atomic::Ordering::Relaxed);
+            d.files.path.clone()
+        }
+        Some(FilesReq::List(p)) => p,
+        None => {
+            files_preview(d);
+            return;
+        }
+    };
+    let path = if path == "/" || fs.is_dir(&path) { path } else { String::from("/") };
+    let entries: Vec<(String, Option<usize>)> = fs.list(&path).map(|(n, s)| (String::from(n), s)).collect();
+    d.files.set_listing(&path, entries);
+    files_preview(d);
+}
+
+fn files_preview(d: &mut Desk) {
+    d.files.preview = d.files.selected_file().and_then(|p| crate::shell::fs().read(&p).map(|b| b[..b.len().min(4096)].to_vec())).unwrap_or_default();
+}
+
+/// Every second: the battery level and an open hover tip (its clock shows seconds).
+fn second_tick(d: &mut Desk, fb: &FbInfo) {
+    if d.wm.is_open(CLOCK) {
+        let r = desktop::app_body(d.wm.rect(CLOCK), d.l.title_h);
+        redraw(d, fb, r);
+    }
+    if d.wm.is_open(NETWORK) {
+        let r = desktop::app_body(d.wm.rect(NETWORK), d.l.title_h);
+        redraw(d, fb, r);
+    }
+    if let Some(b) = crate::battery::read() {
+        let w = desktop::battery_word(b.percent, b.charging, b.on_ac);
+        if desktop::BATTERY.swap(w, core::sync::atomic::Ordering::Relaxed) != w {
+            let r = d.l.panel;
+            redraw(d, fb, r);
+        }
+    }
+    if let Some((k, old)) = d.tip {
+        let r = tip_for(d, k).1;
+        d.tip = Some((k, r));
+        redraw(d, fb, old.union(&r).inflate(desktop::SHADOW / 2));
+    }
 }
 
 fn press(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
@@ -771,14 +957,7 @@ fn press(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
     if min.contains(x, y) || close.contains(x, y) {
         hide_app(d, fb, app);
     } else if max.contains(x, y) {
-        if app == CHATBOX {
-            set_message(d, fb, "ChatBox keeps its size; the apps can be maximised");
-        } else {
-            let old = d.wm.toggle_max(app, &mut d.maxed);
-            redraw(d, fb, old.inflate(desktop::SHADOW));
-            let r = win_area(d, app);
-            redraw(d, fb, r);
-        }
+        toggle_max(d, fb, app);
     } else if desktop::title_bar(win, th).contains(x, y) {
         d.drag = Some((app, x - win.x, y - win.y));
         d.drag_drawn = 0;
@@ -789,10 +968,34 @@ fn press(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
             NOTES => d.notes.as_mut().map_or(Effect::None, |n| n.click(body, &f, x, y)),
             TASKS => d.tasks.as_mut().map_or(Effect::None, |t| t.click(body, &f, x, y)),
             SETTINGS => d.settings.click(body, &f, x, y),
+            CALC => d.calc.click(body, x, y),
+            FILES => {
+                let (e, req) = d.files.click(body, &f, x, y);
+                files_req(d, req);
+                e
+            }
             _ => Effect::None,
         };
         after_effect(d, fb, app, e);
     }
+}
+
+/// Maximises `app` or restores its size. For ChatBox the console's text grid follows the new size.
+fn toggle_max(d: &mut Desk, fb: &FbInfo, app: usize) {
+    let old = d.wm.toggle_max(app, &mut d.maxed);
+    if app == CHATBOX {
+        let t = d.l.term_in(d.wm.rect(CHATBOX));
+        // SAFETY: TERMBUF holds MAX_W * MAX_H pixels, more than any text area on this screen.
+        let ok = log::with_console(|c| unsafe { c.resize(t.w as usize, t.h as usize) }).unwrap_or(false);
+        if !ok {
+            d.wm.toggle_max(app, &mut d.maxed);
+            set_message(d, fb, "ChatBox cannot change size right now");
+            return;
+        }
+        let _ = crate::fb::take_dirty();
+    }
+    let r = old.inflate(desktop::SHADOW).union(&win_area(d, app));
+    redraw(d, fb, r);
 }
 
 fn after_effect(d: &mut Desk, fb: &FbInfo, app: usize, e: Effect) {
@@ -877,6 +1080,12 @@ pub fn desk_key(k: Key) -> bool {
             palette_key(d, &fb, k);
             return true;
         }
+        if k == Key::Ctrl(b'm') {
+            if let Some(top) = d.wm.focused() {
+                toggle_max(d, &fb, top);
+            }
+            return true;
+        }
         if k == Key::Ctrl(b't') {
             if let Some(top) = d.wm.focused() {
                 d.wm.cycle();
@@ -898,6 +1107,24 @@ pub fn desk_key(k: Key) -> bool {
             TASKS => d.tasks.as_mut().map_or(Effect::None, |t| t.key(k)),
             HELP => d.help.key(k),
             SETTINGS => d.settings.key(k),
+            CALC => d.calc.key(k),
+            CLOCK => d.clock.key(k, log::uptime_us()),
+            SNAKE => d.snake.key(k),
+            FILES => {
+                let (e, req) = d.files.key(k);
+                files_req(d, req);
+                e
+            }
+            NETWORK => {
+                if k == Key::Enter {
+                    open_app(d, &fb, CHATBOX);
+                    // SAFETY: as in `injected_key`.
+                    let q = unsafe { INJECT.get() };
+                    q.extend(b"nettest".iter().map(|&b| Key::Char(b)));
+                    q.push_back(Key::Enter);
+                }
+                Effect::None
+            }
             _ => return false,
         };
         after_effect(d, &fb, app, e);

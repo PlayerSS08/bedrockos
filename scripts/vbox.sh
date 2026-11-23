@@ -8,7 +8,7 @@ OUT="$ROOT/out"
 VM=BedrockOS
 VDI="$OUT/bedrockos.vdi"
 SERIAL="$OUT/serial.log"
-ACTION=start RES=1024x768 TYPE=gui NET=nat BRIDGE="" BUILD=0
+ACTION=start RES=1280x800 TYPE=gui NET=nat BRIDGE="" BUILD=0
 while [ $# -gt 0 ]; do
   case "$1" in
     start|create|stop|delete|screenshot) ACTION=$1 ;;

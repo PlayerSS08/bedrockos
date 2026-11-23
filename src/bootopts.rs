@@ -19,6 +19,8 @@ pub struct BootOpts {
     pub nolapic: bool,
     /// Requested screen mode `(width, height)`; ignored when the firmware has no such mode.
     pub mode: Option<(u32, u32)>,
+    /// Time zone offset from UTC in minutes (`tz=+05:30`), for the clock.
+    pub tz: Option<i32>,
 }
 
 /// Seconds the menu waits before it starts the highlighted entry. Long enough to read and decide.
@@ -27,7 +29,7 @@ pub const MAX_TIMEOUT: u8 = 30;
 
 impl Default for BootOpts {
     fn default() -> Self {
-        Self { quiet: false, debug: false, menu_timeout: DEFAULT_TIMEOUT, verbose: false, recovery: false, nocount: false, nolapic: false, mode: None }
+        Self { quiet: false, debug: false, menu_timeout: DEFAULT_TIMEOUT, verbose: false, recovery: false, nocount: false, nolapic: false, mode: None, tz: None }
     }
 }
 
@@ -46,6 +48,9 @@ pub fn parse(cmdline: &str) -> BootOpts {
             _ => {
                 if let Some(n) = w.strip_prefix("timeout=").and_then(|n| n.parse::<u8>().ok()) {
                     o.menu_timeout = n.min(MAX_TIMEOUT);
+                }
+                if let Some(m) = w.strip_prefix("tz=").and_then(crate::tz::parse) {
+                    o.tz = Some(m);
                 }
                 if let Some((w, h)) = w.strip_prefix("mode=").and_then(parse_mode) {
                     o.mode = Some((w, h));
@@ -158,6 +163,8 @@ mod tests {
         assert!(o.quiet && !o.debug);
         assert_eq!(o.menu_timeout, 7);
         assert_eq!(parse("nomenu").menu_timeout, 0);
+        assert_eq!(parse("tz=+05:30").tz, Some(330));
+        assert_eq!(parse("tz=junk").tz, None);
     }
 
     #[test]

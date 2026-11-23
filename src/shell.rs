@@ -3407,6 +3407,7 @@ fn cmd_extra(cmd: &str, rest: &str) {
         "cmds" => cmd_help(""),
         "keys" => {
             out!("Desktop:  click the dock to open apps; drag a title bar to move; _ minimises, x closes; Ctrl+T next window\n");
+            out!("          Ctrl+M maximise / restore, Ctrl+Space command palette; point at the clock or battery for details\n");
             out!("ChatBox:  Tab completes, Ctrl+Up/Down history, Up/Down/PgUp/PgDn scroll, Ctrl+L clear, Ctrl+C cancel\n");
             out!("          Ctrl+A/E start/end of line, Ctrl+U/K cut before/after, Ctrl+W cut word\n");
             out!("Notes:    Ctrl+N new note, Ctrl+D delete note, Ctrl+Up/Down switch note, arrows/PgUp/PgDn move\n");
@@ -3531,6 +3532,63 @@ fn cmd_nettest() {
         Err(e) => e.clone(),
     });
     out!("{} of 5 passed\n", pass);
+}
+
+const TZ_FILE: &str = "/config/tz";
+
+/// `tz` shows the time zone; `tz <zone or offset>` changes it (saved, so it stays after a reboot).
+fn cmd_tz(rest: &str) {
+    let rest = rest.trim();
+    if rest.is_empty() {
+        let off = crate::tz::offset();
+        let (abbr, region) = crate::tz::names(off);
+        out!("time zone: {} {} ({})
+", abbr, region, crate::tz::utc_text(off));
+        out!("change it: tz <name> or tz +HH:MM. Names:
+");
+        for z in crate::tz::ZONES {
+            out!("  {:<12} {:<5} {}
+", z.0, z.2, crate::tz::utc_text(z.1));
+        }
+        return;
+    }
+    let Some(m) = crate::tz::parse(rest) else {
+        out!("tz: `{}` is not a zone name or an offset like +05:30
+", rest);
+        return;
+    };
+    crate::tz::set(m);
+    let _ = fs().mkdir("/config");
+    let text = crate::tz::utc_text(m);
+    if let Err(e) = fs().write(TZ_FILE, &text.as_bytes()[3..]) {
+        fs_error(e, TZ_FILE);
+    }
+    crate::bootfx::panel_refresh();
+    let (abbr, region) = crate::tz::names(m);
+    out!("time zone set to {} {} ({})
+", abbr, region, text);
+}
+
+fn cmd_battery(rest: &str) {
+    if rest.trim() == "-v" {
+        if let Some(r) = crate::battery::raw() {
+            for (i, x) in r.iter().enumerate() {
+                out!("  reg {:2}: {:#x} ({})\n", i, x, x);
+            }
+        }
+    }
+    match crate::battery::read() {
+        Some(b) => {
+            match b.percent {
+                Some(p) => out!("battery {}%", p),
+                None => out!("no battery"),
+            }
+            out!(", {}
+", if b.on_ac { if b.charging { "plugged in, charging" } else { "plugged in" } } else { "on battery" });
+        }
+        None => out!("battery: not known on this machine (BedrockOS reads it from VirtualBox)
+"),
+    }
 }
 
 /// `note list`, `note export <title> <file.txt>`, `note import <file.txt> [title]`: the Notes app's notes
@@ -3773,11 +3831,13 @@ fn run_plain(line: &str, hist: &History) {
         }
         "task" => cmd_task(rest),
         "nettest" => cmd_nettest(),
+        "tz" => cmd_tz(rest),
+        "battery" => cmd_battery(rest),
         "note" => cmd_note(rest),
         "open" => match crate::bootfx::open_named(rest.trim()) {
-            _ if rest.trim().is_empty() => out!("usage: open <notes|tasks|settings|help>\n"),
+            _ if rest.trim().is_empty() => out!("usage: open <app>   apps: notes tasks files network calculator clock snake settings help\n"),
             Ok(()) => {}
-            Err(e) => out!("open: {} (apps: notes, tasks, settings, help)\n", e),
+            Err(e) => out!("open: {} (apps: notes tasks files network calculator clock snake settings help)\n", e),
         },
         "calc" | "about" | "neofetch" | "cmds" | "keys" | "uuid" | "rand" | "fortune" | "base64" | "bench" | "todo-today" => cmd_extra(cmd, rest),
         "net" => {
@@ -4072,6 +4132,10 @@ pub extern "C" fn shell_task(_: usize) {
 
     prepare_fs();
     persist_restore();
+    // A time zone chosen with `tz` wins over the boot option.
+    if let Some(m) = fs().read(TZ_FILE).and_then(|b| core::str::from_utf8(b).ok()).and_then(crate::tz::parse) {
+        crate::tz::set(m);
+    }
     wifi_autoconnect();
     out!("\nBedrockOS shell. Type `help`.\n{}", prompt());
     loop {

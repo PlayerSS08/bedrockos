@@ -42,9 +42,9 @@ impl Fonts {
     }
 }
 
-const BG: Color = rgb(22, 26, 40);
-const SIDEBAR: Color = rgb(30, 35, 54);
-const SELECTED: Color = rgb(48, 64, 104);
+pub(crate) const BG: Color = rgb(22, 26, 40);
+pub(crate) const SIDEBAR: Color = rgb(30, 35, 54);
+pub(crate) const SELECTED: Color = rgb(48, 64, 104);
 /// The most bytes one note may hold.
 pub const NOTE_MAX: usize = 32 * 1024;
 /// Where notes are kept in the file system.
@@ -53,12 +53,12 @@ pub const NOTES_DIR: &str = "/notes";
 pub const TASKS_FILE: &str = "/tasks.txt";
 
 /// Draws `s` and returns nothing; text is clipped by the canvas clip.
-fn text(c: &mut Canvas, f: &Face, x: i32, y: i32, s: &str, col: Color) {
+pub(crate) fn text(c: &mut Canvas, f: &Face, x: i32, y: i32, s: &str, col: Color) {
     c.text(f, x, y, s, col, 1.0);
 }
 
 /// Runs `draw` with the clip narrowed to `r`, then restores it.
-fn clipped(c: &mut Canvas, r: Rect, draw: impl FnOnce(&mut Canvas)) {
+pub(crate) fn clipped(c: &mut Canvas, r: Rect, draw: impl FnOnce(&mut Canvas)) {
     let old = c.clip();
     c.set_clip(old.intersect(&r));
     if !c.clip().is_empty() {
@@ -942,7 +942,7 @@ mod tests {
     #[test]
     fn palette_finds_apps_and_commands() {
         let mut p = Palette::default();
-        assert!(p.matches().iter().any(|m| m.2 == Pick::App(crate::desktop::SETTINGS)));
+        assert_eq!(p.matches().len(), PALETTE_ROWS, "an empty query lists the apps");
         for b in b"set" {
             p.key(Key::Char(*b));
         }

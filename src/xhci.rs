@@ -1181,10 +1181,18 @@ impl Xhci {
                     m.dirty = true;
                 }
             }
-            _ => m.errors = m.errors.saturating_add(1),
+            cc => {
+                m.errors = m.errors.saturating_add(1);
+                warn!("xhci", "mouse report failed with completion code {} ({} errors)", cc, m.errors);
+            }
         }
-        if m.errors < 8 && m.ring.enqueue(Trb::normal(m.report, 8)).is_some() {
+        if m.errors >= 8 {
+            return;
+        }
+        if m.ring.enqueue(Trb::normal(m.report, 8)).is_some() {
             wr32(db + 4 * u64::from(m.slot), u32::from(m.dci));
+        } else {
+            warn!("xhci", "mouse transfer ring full");
         }
     }
 

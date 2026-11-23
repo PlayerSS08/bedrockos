@@ -5,7 +5,7 @@ For each resolution: (re)attach out/bedrockos.vdi to the VM, start it headless, 
 shows the expected markers, take a screenshot with `VBoxManage controlvm screenshotpng`, check its size and
 that it is not blank, then power the VM off.
 
-    python tests/vbox_boot.py                       # 1024x768 and 1920x1080
+    python tests/vbox_boot.py                       # 1024x768 and 1280x800 (--res 1920x1080 for others)
     python tests/vbox_boot.py --res 1024x768 --keep # leave the VM running afterwards
 
 Screenshots land in out/test-shots/. Exit code 0 only when every check passes.
@@ -183,7 +183,8 @@ def main():
     if not os.path.exists(os.path.join(OUT, "bedrockos.vdi")):
         sys.exit("out/bedrockos.vdi missing: run `cargo xtask build` first")
     r = Result()
-    resolutions = a.res or ["1024x768", "1920x1080"]
+    # Ends at 1280x800: the size that fits a laptop screen at 125% scaling with VirtualBox's menus.
+    resolutions = a.res or ["1024x768", "1280x800"]
     for i, res in enumerate(resolutions):
         boot_at(res, r, a.keep and i == len(resolutions) - 1)
     passed = sum(1 for x in r.rows if x[1])

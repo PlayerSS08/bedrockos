@@ -5,13 +5,13 @@
 .EXAMPLE
   .\scripts\vbox.ps1                 # build if needed, create/refresh the VM, attach the disk, start it
   .\scripts\vbox.ps1 -Headless       # same, without a window (serial log in out\serial.log)
-  .\scripts\vbox.ps1 -Res 1920x1080  # firmware screen resolution (default 1024x768)
+  .\scripts\vbox.ps1 -Res 1920x1080  # firmware screen resolution (default 1280x800: fits a laptop screen at 125% scaling)
   .\scripts\vbox.ps1 -Action stop | delete | screenshot
 #>
 param(
     [ValidateSet('start', 'stop', 'delete', 'screenshot', 'create')]
     [string]$Action = 'start',
-    [string]$Res = '1024x768',
+    [string]$Res = '1280x800',
     [switch]$Headless,
     [switch]$Build,
     [ValidateSet('nat', 'bridged', 'intnet', 'none')]

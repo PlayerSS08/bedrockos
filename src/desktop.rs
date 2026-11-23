@@ -9,6 +9,7 @@ use crate::gfont;
 use crate::gui::canvas::{self, rgb, Canvas, Color, Rect};
 use crate::gui::math;
 use crate::gui::theme::DARK;
+use alloc::string::String;
 
 /// The console's background (black), so the window body matches the text area exactly.
 pub const TERM_BG: Color = 0;
@@ -36,12 +37,15 @@ pub struct DeskLayout {
 }
 
 /// The apps of the dock, in order, and the milestone that builds each one (`None` = available now).
-pub const APPS: [(&str, Option<u8>); 7] = [
+pub const APPS: [(&str, Option<u8>); 10] = [
     ("Notes", None),
     ("Tasks", None),
-    ("Browser", Some(9)),
+    ("Files", None),
     ("ChatBox", None),
-    ("Wi-Fi", Some(8)),
+    ("Network", None),
+    ("Calculator", None),
+    ("Clock", None),
+    ("Snake", None),
     ("Settings", None),
     ("Help", None),
 ];
@@ -50,8 +54,13 @@ pub const APPS: [(&str, Option<u8>); 7] = [
 pub const NOTES: usize = 0;
 pub const TASKS: usize = 1;
 pub const CHATBOX: usize = 3;
-pub const HELP: usize = 6;
-pub const SETTINGS: usize = 5;
+pub const FILES: usize = 2;
+pub const NETWORK: usize = 4;
+pub const CALC: usize = 5;
+pub const CLOCK: usize = 6;
+pub const SNAKE: usize = 7;
+pub const SETTINGS: usize = 8;
+pub const HELP: usize = 9;
 
 /// The title bar of a window at `win` with title-bar height `th`.
 pub fn title_bar(win: Rect, th: i32) -> Rect {
@@ -91,9 +100,9 @@ impl DeskLayout {
         let body = Rect::new(window.x + 1, window.y + title_h, window.w - 2, window.h - title_h - 10);
         let pad = if big { 12 } else { 8 };
         let term = Rect::new(body.x + pad, body.y + pad / 2, body.w - 2 * pad, body.h - pad / 2);
-        let clock_w = if big { 460 } else { 320 };
+        let clock_w = if big { 480 } else { 370 };
         let clock = Rect::new(wi - clock_w - 12, 0, clock_w, panel_h);
-        let message = Rect::new(wi / 2 - wi / 6, 0, 2 * (wi / 6), panel_h);
+        let message = Rect::new(wi / 2 - wi / 8, 0, 2 * (wi / 8), panel_h);
         DeskLayout { w: wi, h: hi, panel, window, title_h, body, term, clock, dock, icon, message }
     }
 
@@ -110,8 +119,10 @@ impl DeskLayout {
     pub fn app_rects(&self) -> [Rect; APPS.len()] {
         let mut r = [self.window; APPS.len()];
         let (w, h) = (self.window.w * 2 / 3, self.window.h * 4 / 5);
-        for (k, &app) in [NOTES, TASKS, HELP, 2, 4, 5].iter().enumerate() {
-            let k = k as i32;
+        for (k, app) in (0..APPS.len()).filter(|&a| a != CHATBOX).enumerate() {
+            let k = (k % 6) as i32;
+            // The calculator is a small window; the others share one size.
+            let (w, h) = if app == CALC { ((w * 4 / 5).min(640), h) } else { (w, h) };
             let x = (self.window.x + self.window.w / 3 - 40 + k * 44).min(self.w - w);
             let y = (self.window.y + 16 + k * 32).min(self.dock.y - h);
             r[app] = Rect::new(x, y, w, h);
@@ -121,7 +132,9 @@ impl DeskLayout {
 
     /// Where the console's text goes when the ChatBox window is at `win`.
     pub fn term_in(&self, win: Rect) -> Rect {
-        Rect::new(self.term.x + win.x - self.window.x, self.term.y + win.y - self.window.y, self.term.w, self.term.h)
+        let (il, it) = (self.term.x - self.window.x, self.term.y - self.window.y);
+        let (ir, ib) = (self.window.right() - self.term.right(), self.window.bottom() - self.term.bottom());
+        Rect::new(win.x + il, win.y + it, win.w - il - ir, win.h - it - ib)
     }
 
     /// The tile of dock icon `i`.
@@ -191,10 +204,9 @@ pub fn draw_panel_text(c: &mut Canvas, l: &DeskLayout, clock: &str, msg: &str) {
     }
     let f = face(l.big());
     let ty = l.panel.y + (l.panel.h - f.height as i32) / 2;
-    let r = l.clock;
-    let tw = canvas::text_width(f, clock, 0);
-    c.text(f, r.right() - tw - 8, ty, clock, DARK.text, 1.0);
-    status_icons(c, r.right() - tw - 24, l.panel.y + l.panel.h / 2, f.height as i32);
+    let [net, bat, time] = panel_spots(l, clock);
+    c.text(f, time.x, ty, clock, DARK.text, 1.0);
+    status_icons(c, l, net, bat);
     if !msg.is_empty() {
         let m = l.message;
         let tw = canvas::text_width(f, msg, 0);
@@ -205,23 +217,82 @@ pub fn draw_panel_text(c: &mut Canvas, l: &DeskLayout, clock: &str, msg: &str) {
 /// Is the network (the laptop's connection, in VirtualBox) up? Set by the kernel, shown in the panel.
 pub static NET_UP: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 
-/// Wi-Fi signal bars and a battery, right-aligned to `right`, centred on `cy`. The bars are bright when the
-/// network is up. The battery shows mains power (full, with a bolt): neither VirtualBox nor the firmware
-/// report a battery to BedrockOS.
-fn status_icons(c: &mut Canvas, right: i32, cy: i32, size: i32) {
-    let u = (size / 6).max(2);
-    // Battery: body, nub, fill.
+/// The battery as the kernel last read it: 0 = unknown, otherwise `1 << 31 | on_ac << 9 | charging << 8 |
+/// percent` (percent 255 = no battery).
+pub static BATTERY: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+pub fn battery_word(percent: Option<u8>, charging: bool, on_ac: bool) -> u32 {
+    1 << 31 | u32::from(on_ac) << 9 | u32::from(charging) << 8 | u32::from(percent.unwrap_or(255))
+}
+
+/// The percentage text shown next to the battery ("87%"), empty when unknown.
+fn battery_label(buf: &mut [u8; 8]) -> &str {
+    let w = BATTERY.load(core::sync::atomic::Ordering::Relaxed);
+    let p = w & 0xFF;
+    if w == 0 || p > 100 {
+        return "";
+    }
+    let mut n = 0;
+    let mut put = |d: u32| {
+        buf[n] = b'0' + d as u8;
+        n += 1;
+    };
+    if p >= 100 {
+        put(1);
+        put(0);
+        put(0);
+    } else {
+        if p >= 10 {
+            put(p / 10);
+        }
+        put(p % 10);
+    }
+    buf[n] = b'%';
+    core::str::from_utf8(&buf[..=n]).unwrap_or("")
+}
+
+/// The panel's hover spots, right to left: network bars, battery (icon and percentage), clock text.
+pub fn panel_spots(l: &DeskLayout, clock: &str) -> [Rect; 3] {
+    let f = face(l.big());
+    let u = (f.height as i32 / 6).max(2);
+    let (y, h) = (l.panel.y, l.panel.h);
+    let tw = canvas::text_width(f, clock, 0);
+    let time = Rect::new(l.clock.right() - tw - 8, y, tw, h);
+    let mut b = [0u8; 8];
+    let pw = canvas::text_width(f, battery_label(&mut b), 0);
+    let bat_w = u * 7 + 2 + if pw > 0 { pw + 6 } else { 0 };
+    let bat = Rect::new(time.x - 16 - bat_w, y, bat_w, h);
+    let net_w = 4 * u + 3 * (u / 2);
+    let net = Rect::new(bat.x - 14 - net_w, y, net_w, h);
+    [net, bat, time]
+}
+
+/// Wi-Fi signal bars (bright when the network is up) and the battery with its percentage (green fill
+/// to the charge level; full and dim when it is not known).
+fn status_icons(c: &mut Canvas, l: &DeskLayout, net: Rect, bat: Rect) {
+    let f = face(l.big());
+    let u = (f.height as i32 / 6).max(2);
+    let cy = l.panel.y + l.panel.h / 2;
     let (bw, bh) = (u * 6, u * 3);
-    let bx = right - bw - u;
-    let by = cy - bh / 2;
+    let (bx, by) = (bat.x, cy - bh / 2);
+    let w = BATTERY.load(core::sync::atomic::Ordering::Relaxed);
+    let pct = (w & 0xFF) as i32;
+    let known = w != 0 && pct <= 100;
     c.round_rect_stroke(bx as f32 + 0.5, by as f32 + 0.5, bw as f32, bh as f32, u as f32 * 0.6, 1.5, DARK.text, 0.9);
     c.fill_rect(Rect::new(bx + bw + 1, cy - u / 2 - 1, (u / 2).max(2), u + 2), DARK.text);
-    c.fill_rect(Rect::new(bx + 3, by + 3, bw - 5, bh - 5), DARK.good);
-    // Signal bars.
+    let fill_w = if known { ((bw - 5) * pct / 100).max(1) } else { bw - 5 };
+    let col = if !known { DARK.text_dim } else if pct <= 20 && w & 0x300 == 0 { DARK.warn } else { DARK.good };
+    c.fill_rect(Rect::new(bx + 3, by + 3, fill_w, bh - 5), col);
+    let mut b = [0u8; 8];
+    let label = battery_label(&mut b);
+    if !label.is_empty() {
+        let ty = l.panel.y + (l.panel.h - f.height as i32) / 2;
+        c.text(f, bx + bw + u + 6, ty, label, DARK.text, 1.0);
+    }
     let up = NET_UP.load(core::sync::atomic::Ordering::Relaxed);
     let col = if up { DARK.text } else { DARK.text_dim };
     let base = cy + bh / 2 + 1;
-    let mut x = bx - u * 2 - 4 * (u + u / 2);
+    let mut x = net.x;
     for i in 1..=4 {
         let h = u * i + u / 2;
         c.fill_rect(Rect::new(x, base - h, u, h), if up || i == 1 { col } else { rgb(70, 78, 100) });
@@ -229,6 +300,25 @@ fn status_icons(c: &mut Canvas, right: i32, cy: i32, size: i32) {
     }
 }
 
+/// A hover tip box under the panel, right-aligned with `anchor`, holding `lines`.
+pub fn tip_rect(l: &DeskLayout, anchor: Rect, lines: &[String]) -> Rect {
+    let f = face(l.big());
+    let w = lines.iter().map(|s| canvas::text_width(f, s, 0)).max().unwrap_or(0) + 28;
+    let h = lines.len() as i32 * (f.height as i32 + 6) + 18;
+    let x = (anchor.right() - w).clamp(8, (l.w - w - 8).max(8));
+    Rect::new(x, l.panel.bottom() + 6, w, h)
+}
+
+pub fn draw_tip(c: &mut Canvas, l: &DeskLayout, r: Rect, lines: &[String]) {
+    let f = face(l.big());
+    c.shadow(r.x as f32, r.y as f32 + 4.0, r.w as f32, r.h as f32, 8.0, 14.0, 0, 0.5);
+    c.round_rect(r.x as f32, r.y as f32, r.w as f32, r.h as f32, 8.0, rgb(24, 29, 46), 1.0);
+    c.round_rect_stroke(r.x as f32 + 0.5, r.y as f32 + 0.5, r.w as f32 - 1.0, r.h as f32 - 1.0, 8.0, 1.0, rgb(70, 82, 116), 1.0);
+    for (i, s) in lines.iter().enumerate() {
+        let col = if i == 0 { DARK.text } else { DARK.text_dim };
+        c.text(f, r.x + 14, r.y + 9 + i as i32 * (f.height as i32 + 6), s, col, 1.0);
+    }
+}
 /// The dock, with a dot under every app whose window is open.
 pub fn draw_dock(c: &mut Canvas, l: &DeskLayout, open: &[bool; APPS.len()]) {
     let d = l.dock;
@@ -253,27 +343,30 @@ pub fn draw_dock(c: &mut Canvas, l: &DeskLayout, open: &[bool; APPS.len()]) {
 fn icon(c: &mut Canvas, t: Rect, app: usize) {
     let (x, y, s) = (t.x as f32, t.y as f32, t.w as f32);
     let (top, bottom) = match app {
-        0 => (rgb(255, 214, 102), rgb(240, 170, 60)),  // Notes: yellow
-        1 => (rgb(110, 220, 150), rgb(50, 170, 100)),  // Tasks: green
-        2 => (rgb(110, 176, 255), rgb(60, 110, 230)),  // Browser: blue
-        3 => (rgb(70, 78, 100), rgb(36, 40, 56)),      // Terminal: graphite
-        4 => (rgb(100, 226, 214), rgb(40, 170, 170)),  // Wi-Fi: teal
-        5 => (rgb(170, 176, 196), rgb(110, 118, 140)), // Settings: grey
-        _ => (rgb(196, 140, 255), rgb(130, 80, 220)),  // Help: violet
+        NOTES => (rgb(255, 214, 102), rgb(240, 170, 60)),
+        TASKS => (rgb(110, 220, 150), rgb(50, 170, 100)),
+        FILES => (rgb(110, 176, 255), rgb(60, 110, 230)),
+        CHATBOX => (rgb(70, 78, 100), rgb(36, 40, 56)),
+        NETWORK => (rgb(100, 226, 214), rgb(40, 170, 170)),
+        CALC => (rgb(255, 150, 90), rgb(225, 90, 50)),
+        CLOCK => (rgb(90, 100, 140), rgb(40, 46, 74)),
+        SNAKE => (rgb(60, 70, 60), rgb(24, 32, 26)),
+        SETTINGS => (rgb(170, 176, 196), rgb(110, 118, 140)),
+        _ => (rgb(196, 140, 255), rgb(130, 80, 220)),
     };
     c.round_rect_vgrad(x, y, s, s, s * 0.24, top, bottom, 1.0);
     let (cx, cy) = (x + s / 2.0, y + s / 2.0);
     let white = rgb(255, 255, 255);
     let ink = rgb(40, 44, 60);
     match app {
-        0 => {
+        NOTES => {
             // A page with ruled lines.
             c.round_rect(x + s * 0.26, y + s * 0.2, s * 0.48, s * 0.6, s * 0.06, white, 1.0);
             for k in 0..4 {
                 c.round_rect(x + s * 0.33, y + s * (0.32 + 0.11 * k as f32), s * 0.34, s * 0.04, s * 0.02, rgb(200, 170, 110), 1.0);
             }
         }
-        1 => {
+        TASKS => {
             // Three rows: a checkbox dot and a bar.
             for k in 0..3 {
                 let ry = y + s * (0.3 + 0.2 * k as f32);
@@ -281,19 +374,40 @@ fn icon(c: &mut Canvas, t: Rect, app: usize) {
                 c.round_rect(x + s * 0.42, ry - s * 0.035, s * 0.34, s * 0.07, s * 0.035, white, 0.9);
             }
         }
-        2 => {
-            // A globe: outline ring, an equator and a meridian.
-            c.arc(cx, cy, s * 0.26, s * 0.06, 1.0, white, 1.0);
-            c.round_rect(cx - s * 0.26, cy - s * 0.025, s * 0.52, s * 0.05, 0.0, white, 0.9);
-            c.round_rect(cx - s * 0.025, cy - s * 0.26, s * 0.05, s * 0.52, 0.0, white, 0.9);
+        FILES => {
+            // A folder: tab and body.
+            c.round_rect(x + s * 0.2, y + s * 0.28, s * 0.26, s * 0.12, s * 0.04, white, 0.85);
+            c.round_rect(x + s * 0.2, y + s * 0.35, s * 0.6, s * 0.38, s * 0.06, white, 1.0);
         }
-        3 => {
+        CALC => {
+            // A 3x3 keypad.
+            for k in 0..9 {
+                let (kx, ky) = ((k % 3) as f32, (k / 3) as f32);
+                c.round_rect(x + s * (0.22 + 0.2 * kx), y + s * (0.22 + 0.2 * ky), s * 0.16, s * 0.16, s * 0.04, white, if k == 8 { 1.0 } else { 0.85 });
+            }
+        }
+        CLOCK => {
+            // A face with two hands.
+            c.circle(cx, cy, s * 0.3, white, 1.0);
+            c.round_rect(cx - s * 0.03, cy - s * 0.22, s * 0.06, s * 0.24, s * 0.03, ink, 1.0);
+            c.round_rect(cx - s * 0.02, cy - s * 0.02, s * 0.18, s * 0.05, s * 0.025, ink, 1.0);
+            c.circle(cx, cy, s * 0.04, rgb(230, 80, 80), 1.0);
+        }
+        SNAKE => {
+            // A green snake of squares and a red apple.
+            for (k, (dx, dy)) in [(0.2, 0.62), (0.32, 0.62), (0.44, 0.62), (0.44, 0.5), (0.44, 0.38), (0.56, 0.38)].iter().enumerate() {
+                let col = if k == 5 { rgb(150, 245, 170) } else { rgb(80, 200, 115) };
+                c.round_rect(x + s * dx, y + s * dy, s * 0.11, s * 0.11, s * 0.03, col, 1.0);
+            }
+            c.circle(x + s * 0.74, y + s * 0.3, s * 0.07, rgb(245, 80, 80), 1.0);
+        }
+        CHATBOX => {
             // A prompt: ">" and a cursor bar.
             let f = &gfont::MONO;
             c.text(f, (x + s * 0.24) as i32, (cy - f.height as f32 / 2.0) as i32, ">", rgb(110, 236, 214), 1.0);
             c.round_rect(x + s * 0.5, cy + s * 0.08, s * 0.22, s * 0.06, 0.0, white, 0.9);
         }
-        4 => {
+        NETWORK => {
             // Three arcs fanning out from a dot near the bottom.
             let by = y + s * 0.72;
             c.circle(cx, by, s * 0.06, white, 1.0);
@@ -301,7 +415,7 @@ fn icon(c: &mut Canvas, t: Rect, app: usize) {
                 c.arc_from(cx, by, s * 0.16 * k as f32, s * 0.06, -0.125, 0.25, white, 1.0);
             }
         }
-        5 => {
+        SETTINGS => {
             // A gear: a ring with eight teeth.
             for k in 0..8 {
                 let a = k as f32 * math::TAU / 8.0;
@@ -464,7 +578,7 @@ fn title_icon(c: &mut Canvas, x: i32, y: i32, s: i32) {
 
 /// Formats the panel clock, such as `Mon 23 Nov  14:05 UTC` (the hardware clock is read as UTC; there is no
 /// time zone setting yet).
-pub fn clock_text<'a>(buf: &'a mut [u8; 28], weekday: &str, day: u8, month: &str, hour: u8, min: u8) -> &'a str {
+pub fn clock_text<'a>(buf: &'a mut [u8; 28], weekday: &str, day: u8, month: &str, hour: u8, min: u8, zone: &str) -> &'a str {
     let mut n = 0;
     let mut put = |b: &[u8]| {
         for &x in b {
@@ -484,7 +598,8 @@ pub fn clock_text<'a>(buf: &'a mut [u8; 28], weekday: &str, day: u8, month: &str
     put(month.as_bytes().get(..3).unwrap_or(month.as_bytes()));
     put(b"  ");
     put(&[b'0' + hour / 10 % 10, b'0' + hour % 10, b':', b'0' + min / 10 % 10, b'0' + min % 10]);
-    put(b" UTC");
+    put(b" ");
+    put(zone.as_bytes());
     core::str::from_utf8(&buf[..n]).unwrap_or("")
 }
 
@@ -662,9 +777,8 @@ mod tests {
     #[test]
     fn dock_messages() {
         let mut b = [0u8; 48];
-        assert_eq!(dock_message(&mut b, 2), "Browser arrives in milestone 9");
+        assert_eq!(dock_message(&mut b, FILES), "Files is open");
         assert_eq!(dock_message(&mut b, CHATBOX), "ChatBox is open");
-        assert_eq!(dock_message(&mut b, 4), "Wi-Fi arrives in milestone 8");
         assert_eq!(dock_message(&mut b, 99), "");
         // Every message fits the panel's message area at the smallest supported screen.
         let l = DeskLayout::new(1024, 768);
@@ -677,8 +791,16 @@ mod tests {
     #[test]
     fn clock_format() {
         let mut b = [0u8; 28];
-        assert_eq!(clock_text(&mut b, "Monday", 23, "November", 14, 5), "Mon 23 Nov  14:05 UTC");
-        assert_eq!(clock_text(&mut b, "Tue", 1, "Jan", 0, 0), "Tue 1 Jan  00:00 UTC");
+        assert_eq!(clock_text(&mut b, "Monday", 23, "November", 14, 5, "UTC"), "Mon 23 Nov  14:05 UTC");
+        assert_eq!(clock_text(&mut b, "Tue", 1, "Jan", 0, 0, "IST"), "Tue 1 Jan  00:00 IST");
+        let mut lb = [0u8; 8];
+        BATTERY.store(battery_word(Some(7), false, false), core::sync::atomic::Ordering::Relaxed);
+        assert_eq!(battery_label(&mut lb), "7%");
+        BATTERY.store(battery_word(Some(100), true, true), core::sync::atomic::Ordering::Relaxed);
+        assert_eq!(battery_label(&mut lb), "100%");
+        BATTERY.store(battery_word(None, false, true), core::sync::atomic::Ordering::Relaxed);
+        assert_eq!(battery_label(&mut lb), "");
+        BATTERY.store(0, core::sync::atomic::Ordering::Relaxed);
     }
 
     /// `BEDROCK_PREVIEW=1 cargo test --lib --target <host> desktop::tests::preview -- --ignored`

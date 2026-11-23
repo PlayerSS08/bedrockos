@@ -915,6 +915,9 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
     // Image info and boot options come first: they decide whether the screen shows the splash or the log.
     read_loaded_image(bs, image);
     let mut opts = bootopts::parse(boot_info().cmdline_str());
+    if let Some(m) = opts.tz {
+        bedrockos::tz::set(m);
+    }
     if opts.quiet {
         log::set_max_level(Level::Warn);
     } else if opts.debug {

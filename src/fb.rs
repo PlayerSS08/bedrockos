@@ -1025,6 +1025,34 @@ impl Console {
         self.status(&text[..n]);
     }
 
+    /// Gives the console a new size inside the same buffer (ChatBox maximised or restored): the text grid
+    /// follows, the history stays and is repainted.
+    ///
+    /// # Safety
+    /// The buffer at the current base must hold `width * height` pixels (the stride becomes `width`).
+    pub unsafe fn resize(&mut self, width: usize, height: usize) -> bool {
+        let (cols, rows) = ((width / self.cw).min(MAX_COLS), (height / self.chh).min(MAX_ROWS));
+        if cols < 20 || rows < 6 || self.splash || self.menu || self.editor {
+            return false;
+        }
+        self.pointer_shown_at = None;
+        self.width = width;
+        self.height = height;
+        self.stride = width;
+        self.cols = cols;
+        self.rows = rows;
+        self.first_row = 0;
+        self.log_rows = rows - 1;
+        self.cur_col = self.cur_col.min(cols - 1);
+        self.scroll = self.scroll.min(self.max_scroll());
+        let bg = self.px(BG);
+        self.fill_rect(0, 0, width, height, bg);
+        self.redraw_log();
+        let (text, n) = (self.status_text, self.status_len);
+        self.status(&text[..n]);
+        true
+    }
+
     /// Removes the pointer from this console until [`Console::pointer_place`] (it is elsewhere on the desktop).
     pub fn pointer_hide(&mut self) {
         self.pointer_erase();

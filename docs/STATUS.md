@@ -1,4 +1,4 @@
-﻿# BedrockOS status
+# BedrockOS status
 
 Legend: **done** = built and checked as stated · **partial** = some of it works, the rest is listed ·
 **untested on hardware** = checked in VirtualBox only · **inherited** = Aeon 0.11.0 code, carried over,
@@ -6,14 +6,14 @@ unit-tested on the host, not yet re-verified in BedrockOS beyond booting · **no
 
 No feature has been tested on real hardware (USB stick on a PC) yet.
 
-Last update: 2026-11-23, milestone 3 (part 7: window manager, Notes, Tasks, Help).
+Last update: 2026-11-23: more apps (Files, Network, Calculator, Clock, Snake), maximise, hover tips, battery, time zone; VM at 1280x800.
 
 | Feature | Status | How it was checked |
 |---|---|---|
 | One-command build (`cargo xtask build`): `.efi`, `out/usb/`, `.img`, `.vdi` | done | Run on Windows 11 with Rust 1.100, Python 3.14, VirtualBox 7.2.22 |
 | Disk image: GPT, FAT32 ESP + empty FAT32 `BRDATA` data partition | done | Booted by VirtualBox EFI. The ESP is labelled `AEON` so the OS may write its saved files (AEONFS.BIN) there; `BRDATA` stays unused |
 | VirtualBox scripts (`scripts/vbox.ps1`, `.bat`, `.sh`) | done (Windows); `.sh` untested | `vbox.ps1` created the VM and booted it; `vbox.sh` written, not run (no Linux/macOS host here) |
-| Boot in VirtualBox to the shell, 1024x768 and 1920x1080 | done, untested on hardware | `tests/vbox_boot.py`: 10/10 checks (serial markers, no panic, screenshot size, non-blank) |
+| Boot in VirtualBox to the shell, 1024x768 and 1280x800 (the default now: it fits a laptop screen at 125% scaling with VirtualBox's own bars) | done, untested on hardware | `tests/vbox_boot.py`: 10/10 checks (serial markers, no panic, screenshot size, non-blank) |
 | Screen mode: keep firmware's mode when it is ≥1024x720 | done | unit test + VirtualBox at both sizes (before: VirtualBox's 7680x4320 was chosen) |
 | Host unit tests | done | `cargo xtask test`: 735 passed, 3 ignored (preview image writers) |
 | Clippy `-D warnings` (UEFI build and host library) | done | `cargo xtask clippy` clean |
@@ -32,17 +32,18 @@ Last update: 2026-11-23, milestone 3 (part 7: window manager, Notes, Tasks, Help
 | Fade into the desktop | done | VirtualBox screenshots: boot screen fades out, desktop fades in (about 0.3 s) |
 | Desktop: wallpaper, top panel with clock, Terminal window | done, untested on hardware | VirtualBox at 1024x768 and 1920x1080: screenshots; `help` typed with key injection shows its output in the window |
 | Shell inside the Terminal window (keyboard input, scrolling, status bar) | done | VirtualBox: inherited console placed in the window rectangle |
-| Panel clock | partial: shows **UTC** (no time zone setting yet), updates every minute | VirtualBox screenshot; minute change not watched |
+| Panel clock with time zone; hover tips on the clock (date, seconds, zone name and region, UTC), battery and network icons | done, untested on hardware | Zone from `tz=` in `/config/bedrock.cfg` (now `+05:30`, India) or the `tz` command (saved to `/config/tz`); VirtualBox: pointer moved with `PutMouseEvent` onto the clock and the battery, screenshots show both tips. Unit tests: `tz` parsing and names, panel text |
 | Move the Terminal window by dragging its title bar | done | VirtualBox: pointer moved onto the title bar, button pressed, dragged, released (all injected with `PutMouseEvent`); screenshots show the window in its new place with its text redrawn, and typed output appears there |
-| Dock: seven app icons (Notes, Tasks, Browser, Terminal, Wi-Fi, Settings, Help) at the bottom; clicking one shows a panel message for about 3 s ("Terminal is open", others "<App> arrives in milestone N") | done, untested on hardware; the apps themselves are **not done** | VirtualBox: Notes clicked at 1920x1080 and Terminal at 1024x768 (pointer moved and clicked with `PutMouseEvent`); screenshots show the message, and 4 s later it is gone. Unit tests: icon hit areas, message texts and widths, window cannot be dragged over the dock |
+| Dock: ten app icons (Notes, Tasks, Files, ChatBox, Network, Calculator, Clock, Snake, Settings, Help) at the bottom, all of them working apps | done, untested on hardware | VirtualBox: Notes clicked at 1920x1080 and Terminal at 1024x768 (pointer moved and clicked with `PutMouseEvent`); screenshots show the message, and 4 s later it is gone. Unit tests: icon hit areas, message texts and widths, window cannot be dragged over the dock |
 | ChatBox window (was "Terminal"): own title bar with the bedrock icon from `assets/bedrock.jpg` (converted by `tools/genicon.py`, background removed), name on the left, minimise / maximise / close on the right, small corner radius | done, untested on hardware | Host preview images and VirtualBox screenshot at 1920x1080; unit tests for the icon data and button positions |
 | Window manager + compositor: several windows (ChatBox, Notes, Tasks, Help), click to focus/raise, drag by title bar, close and minimise buttons, dock opens apps and shows open-app dots, Ctrl+T cycles windows; console draws off-screen and only changed rectangles are copied to the screen | done, partly checked | Unit tests (`wm`, `apps`, clipped redraw = full redraw); VirtualBox: boot test 10/10, Help opened from the dock and drawn under ChatBox. Notes/Tasks typing not yet checked in VirtualBox. No resize (maximise shows a message) |
 | Notes app (sidebar, editor, Ctrl+N/Ctrl+D, auto-save to /notes) and Tasks app (add, done, delete, progress, /tasks.txt), Help app (searches the shell command table) | done, unit-tested; VirtualBox only partly checked | Saved to the RAM file system and then to the USB stick if there is one; in VirtualBox there is no stick, so they are lost at power-off (the shell says so) |
-| Window manager: maximise / restore, focus, several windows, close / minimise | done for the apps; ChatBox keeps its size (its console has a fixed text grid) | unit test `maximise_and_restore`; the maximise button is wired in `bootfx::press` (clicking it was not injected in VirtualBox: the injected mouse only moves right/down there) |
+| Window manager: maximise / restore (button or Ctrl+M), focus, several windows, close / minimise | done, including ChatBox (its text grid is rebuilt at the new size) | unit test `maximise_and_restore`; VirtualBox: Snake maximised by clicking its button (pointer moved with `PutMouseEvent` through pywin32), ChatBox maximised and restored with Ctrl+M, screenshots show the reflowed text |
 | USB mouse in VirtualBox | done | Fixed the inherited xHCI driver: VirtualBox's USB mouse stalls SET_PROTOCOL and SET_IDLE; endpoint 0 is now reset after a stall and the mouse is used anyway. Checked: `USB mouse ready` in the log; movement injected with the VirtualBox COM API (`PutMouseEvent`) arrives as reports and moves the pointer (`mouse` command and screenshot) |
 | Mouse pointer on the whole desktop | done | VirtualBox: movement injected with `PutMouseEvent`; screenshots show the pointer inside the Terminal window (drawn by the console) and on the top panel (drawn by the desktop), with nothing left behind when it crosses between them. Clicks are read but do nothing yet. Inherited glitch: a small pointer fragment can stay behind when text is drawn under the pointer |
 | VirtualBox USB tablet (absolute pointer, the VirtualBox default) | not done: no tablet driver, so the scripts set the VM to a USB mouse (click into the VM window to capture it, Right Ctrl releases) | — |
-| Apps: Notes, Tasks, Help, Settings | done | Settings: About, Network (live address, gateway, DNS), System (uptime, memory, task list refreshed every second), Display. VirtualBox: `open settings`, arrow keys to System, screenshot shows live tasks. Browser and Wi-Fi apps: milestones 8 and 9 (not done) |
+| Apps: Notes, Tasks, Help, Settings | done | Settings: About, Network (live address, gateway, DNS), System (uptime, memory, task list refreshed every second), Display. VirtualBox: `open settings`, arrow keys to System, screenshot shows live tasks |
+| Apps: Files (browse folders, preview text files, Delete twice to delete), Network (live link, address, gateway, DNS; Enter runs `nettest`), Calculator (keypad and keyboard, history), Clock (analog and digital, world clocks, stopwatch with laps), Snake (game) | done, untested on hardware | Unit tests in `apps2` (Files navigation and delete confirm, calculator keys and clicks, stopwatch, snake moves/eats/dies). VirtualBox screenshots: Files listing `/`, Calculator `12*(3+4)` = 84 with history, Clock with running stopwatch in IST, Snake board. Network window and Files deleting were not checked in VirtualBox |
 | Notes / tasks persistence | done in VirtualBox | Saved to the USB stick, or without one to the computer's own disk (AHCI write added; boot volume labelled AEON). Written twice (AEONFS.NEW then AEONFS.BIN) so a power cut leaves one whole copy. Checked: `task add`, `save`, VM reset, `task list` shows the task again |
 | Network manager, own Wi-Fi, simulated AP | not done | milestone 8 |
 | Wi-Fi chip drivers | not done: **no supported chip yet** | milestone 8 |
@@ -54,7 +55,7 @@ Last update: 2026-11-23, milestone 3 (part 7: window manager, Notes, Tasks, Help
 | Feature | Status | How it was checked |
 |---|---|---|
 | Command palette (Ctrl+Space): search apps and commands, Enter opens the app or types the command into ChatBox | done | unit test `palette_finds_apps_and_commands`; VirtualBox: Ctrl+Space, typed `net`, Down, Enter ran `nettest` in ChatBox |
-| Top bar: Wi-Fi bars (bright when the host connection is up) and battery (shown full: VirtualBox reports no battery) | done | VirtualBox screenshot |
+| Top bar: Wi-Fi bars (bright when the host connection is up) and the battery level in percent | done in VirtualBox | Read from VirtualBox's ACPI battery registers (ports 0x4040/0x4044), which mirror the laptop's battery; `battery` and `battery -v` in ChatBox. VirtualBox: "100%" with the laptop plugged in. On real hardware there is no ACPI battery driver yet, so no percentage is shown |
 | Commands: `calc`, `neofetch`, `about`, `cmds`, `keys`, `open <app>`, `uuid`, `rand`, `fortune`, `base64`, `bench`, `todo-today`, `note`, `nettest` | done | unit tests for `calc`; each typed in VirtualBox, screenshots |
 | `nettest`: link, address, gateway ping, DNS, HTTP fetch as a pass/fail table | done | VirtualBox (NAT): 5 of 5 passed |
 | Pipes into text filters: `sort [-n] [-r]`, `uniq`, `head`, `tail`, `grep`, `rev`, `upper`, `lower` (and `wc` from /bin) | done | VirtualBox: `help \| grep calc \| upper`, `cmds \| wc`, `ls /bin \| wc` |

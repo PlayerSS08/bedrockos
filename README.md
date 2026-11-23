@@ -7,11 +7,12 @@ Terminal, Wi-Fi and Settings apps, running by itself in VirtualBox and from a US
 **Current state: release 0.1.0: milestones 1–7 and 10 done; 8 (own Wi-Fi drivers) and 9 (browser) are
 not.** It boots in VirtualBox with an animated boot screen and boot menu, then fades into a desktop with:
 
-- a top bar with the clock and Wi-Fi and battery icons, and a dock to open apps;
-- windows you can move, focus, minimise, close and (apps) maximise, Ctrl+T switches between them;
+- a top bar with the clock (time zone, `tz`), the network and the battery percentage; point at them for details;
+- windows you can move, focus, minimise, close and maximise (Ctrl+M), Ctrl+T switches between them;
 - **ChatBox**, the shell: more than 100 commands (`help`, `cmds`), pipes, redirects and /bin programs;
 - **Notes** (undo/redo, find, rename, line copy/paste, `.txt` import/export), **Tasks**, **Help**, and
   **Settings** (about, network, live system and task view, display);
+- **Files**, **Network**, **Calculator**, **Clock** (world clocks, stopwatch) and **Snake**, all in the dock;
 - a **command palette** (Ctrl+Space) that opens apps or runs commands;
 - networking through the laptop's connection (`nettest` checks link, address, gateway, DNS and HTTP);
 - files, notes and tasks saved to the VM disk (or a USB stick), so they survive a reboot.
