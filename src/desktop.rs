@@ -1,4 +1,4 @@
-﻿//! The desktop picture: wallpaper, the top panel (name, clock) and the frame of the ChatBox window, whose
+//! The desktop picture: wallpaper, the top panel (name, clock) and the frame of the ChatBox window, whose
 //! inside is left to the text console. Pure: it draws into a [`Canvas`]; the kernel copies the result to
 //! the screen and places the console in [`DeskLayout::term`].
 //!
@@ -42,7 +42,7 @@ pub const APPS: [(&str, Option<u8>); 7] = [
     ("Browser", Some(9)),
     ("ChatBox", None),
     ("Wi-Fi", Some(8)),
-    ("Settings", Some(10)),
+    ("Settings", None),
     ("Help", None),
 ];
 
@@ -51,6 +51,7 @@ pub const NOTES: usize = 0;
 pub const TASKS: usize = 1;
 pub const CHATBOX: usize = 3;
 pub const HELP: usize = 6;
+pub const SETTINGS: usize = 5;
 
 /// The title bar of a window at `win` with title-bar height `th`.
 pub fn title_bar(win: Rect, th: i32) -> Rect {
@@ -635,7 +636,7 @@ mod tests {
         let mut b = [0u8; 48];
         assert_eq!(dock_message(&mut b, 2), "Browser arrives in milestone 9");
         assert_eq!(dock_message(&mut b, CHATBOX), "ChatBox is open");
-        assert_eq!(dock_message(&mut b, 5), "Settings arrives in milestone 10");
+        assert_eq!(dock_message(&mut b, 4), "Wi-Fi arrives in milestone 8");
         assert_eq!(dock_message(&mut b, 99), "");
         // Every message fits the panel's message area at the smallest supported screen.
         let l = DeskLayout::new(1024, 768);

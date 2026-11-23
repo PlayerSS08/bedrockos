@@ -1,4 +1,4 @@
-﻿//! The animated boot screen on real hardware: owns the back buffer, turns real boot stages into the status
+//! The animated boot screen on real hardware: owns the back buffer, turns real boot stages into the status
 //! line and progress bar, paces frames at about 30 per second, and copies only changed rectangles to the
 //! framebuffer (drawing happens off-screen, so nothing flickers). The picture itself is `bootscene` (pure,
 //! host-tested).
@@ -13,8 +13,8 @@ use crate::anim::{self, Smoother};
 use crate::arch;
 use crate::bootinfo::FbInfo;
 use crate::bootscene::{Dirty, MenuView, Scene, View};
-use crate::apps::{parse_tasks, Effect, Fonts, Help, Notes, Tasks, NOTES_DIR, TASKS_FILE};
-use crate::desktop::{self, DeskLayout, APPS, CHATBOX, HELP, NOTES, TASKS};
+use crate::apps::{parse_tasks, Effect, Fonts, Help, Notes, Settings, Tasks, NOTES_DIR, TASKS_FILE};
+use crate::desktop::{self, DeskLayout, APPS, CHATBOX, HELP, NOTES, SETTINGS, TASKS};
 use crate::keymap::Key;
 use crate::wm::Wm;
 use alloc::format;
@@ -241,6 +241,9 @@ struct Desk {
     notes: Option<Notes>,
     tasks: Option<Tasks>,
     help: Help,
+    settings: Settings,
+    /// Last time the live Settings page was refreshed (TSC).
+    settings_at: u64,
     /// Panel message and when it was shown (TSC).
     msg: String,
     msg_at: Option<u64>,
@@ -304,6 +307,8 @@ fn enter_desktop() -> bool {
             notes: None,
             tasks: None,
             help: Help::new(),
+            settings: Settings::default(),
+            settings_at: 0,
             msg: String::new(),
             msg_at: None,
             clock_min: u32::MAX,
@@ -390,6 +395,7 @@ fn compose(d: &mut Desk, fb: &FbInfo, r: Rect) {
                     }
                 }
                 HELP => d.help.draw(&mut c, body, &f, on_top),
+                SETTINGS => d.settings.draw(&mut c, body, &f, &settings_lines(d.settings.page, fb)),
                 _ => {}
             }
         }
@@ -440,6 +446,12 @@ pub fn desk_tick() {
         if min != d.clock_min {
             d.clock_min = min;
             let r = d.l.clock;
+            redraw(d, &fb, r);
+        }
+        // The Settings window shows live values (uptime, memory, tasks): refresh it every second.
+        if d.wm.is_open(SETTINGS) && us_since(d.settings_at) >= 1_000_000 {
+            d.settings_at = arch::rdtsc();
+            let r = desktop::app_body(d.wm.rect(SETTINGS), d.l.title_h);
             redraw(d, &fb, r);
         }
         if d.notes_dirty.is_some_and(|t| us_since(t) >= AUTOSAVE_US) {
@@ -499,6 +511,55 @@ pub fn desk_flush() {
             console_to_screen(d, &fb);
         }
     });
+}
+
+/// The text of Settings page `page` (see `apps::SETTINGS_PAGES`), with live values.
+fn settings_lines(page: usize, fb: &FbInfo) -> Vec<String> {
+    let mut v = Vec::new();
+    let mut push = |s: String| v.push(s);
+    match page {
+        0 => {
+            push(format!("# BedrockOS {}", crate::VERSION));
+            push(String::from("A small Rust operating system for UEFI PCs and VirtualBox."));
+            push(String::from("Desktop: ChatBox (shell), Notes, Tasks, Help, Settings."));
+            push(String::from("# Licences"));
+            push(String::from("Based on Aeon 0.11.0."));
+            push(String::from("Fonts: Inter and JetBrains Mono, SIL Open Font License 1.1."));
+        }
+        1 => {
+            let (ip, mask, gw, dns, dhcp) = crate::netstack::get_config();
+            let up = crate::netdev::link_up();
+            push(String::from("# Host connection (laptop Wi-Fi)"));
+            push(format!("State: {}", if up { "connected" } else { "no link" }));
+            push(format!("Address: {} / {} ({})", ip, mask, if dhcp { "DHCP" } else { "static" }));
+            push(format!("Gateway: {}    DNS: {}", gw, dns));
+            push(String::from("VirtualBox passes the laptop's connection to this network card;"));
+            push(String::from("the laptop chooses the Wi-Fi network in this mode."));
+            push(String::from("# OS Wi-Fi"));
+            push(String::from("No supported Wi-Fi chip yet (milestone 8)."));
+            push(String::from("Type `nettest` in ChatBox for a full check."));
+        }
+        2 => {
+            let s = log::uptime_us() / 1_000_000;
+            let f = crate::mm::frame_stats();
+            let h = crate::mm::heap_stats();
+            push(String::from("# System"));
+            push(format!("Uptime: {:02}:{:02}:{:02}", s / 3600, (s / 60) % 60, s % 60));
+            push(format!("Memory: {} MB free of {} MB", f.free as u64 * 4 / 1024, f.total as u64 * 4 / 1024));
+            push(format!("Kernel heap: {} KiB used", h.used / 1024));
+            push(String::from("# Tasks (id, name, state, CPU ticks)"));
+            crate::sched::for_each(|t| push(format!("{:>3}   {:<14} {:<9} {}", t.id, t.name, t.state.name(), t.ticks)));
+        }
+        _ => {
+            push(String::from("# Display"));
+            push(format!("Screen: {} x {} pixels", fb.width, fb.height));
+            push(String::from("Theme: dark"));
+            push(String::from("The screen mode is chosen at boot: the firmware's mode when it is"));
+            push(String::from("at least 1024 x 720 (set the VM's resolution in VirtualBox)."));
+            push(String::from("Fonts: Inter (text), JetBrains Mono (ChatBox)."));
+        }
+    }
+    v
 }
 
 /// Writes every note to `/notes/<title>.txt` and removes files of deleted notes.
@@ -682,6 +743,7 @@ fn press(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
         let e = match app {
             NOTES => d.notes.as_mut().map_or(Effect::None, |n| n.click(body, &f, x, y)),
             TASKS => d.tasks.as_mut().map_or(Effect::None, |t| t.click(body, &f, x, y)),
+            SETTINGS => d.settings.click(body, &f, x, y),
             _ => Effect::None,
         };
         after_effect(d, fb, app, e);
@@ -707,6 +769,16 @@ fn after_effect(d: &mut Desk, fb: &FbInfo, app: usize, e: Effect) {
 /// A key while the desktop runs. Ctrl+T switches between open windows (like Alt+Tab). Keys for Notes,
 /// Tasks or Help go to that window when it is in front; returns false when the key is for the shell (ChatBox
 /// in front).
+/// Opens (and focuses) the desktop app named `name` (case-insensitive, as in the dock). For `open`.
+pub fn open_named(name: &str) -> Result<(), &'static str> {
+    let app = desktop::APPS.iter().position(|(n, m)| m.is_none() && n.eq_ignore_ascii_case(name)).ok_or("no such app")?;
+    arch::without_interrupts(|| {
+        let (Some(d), Some(fb)) = (desk(), state().fb) else { return Err("the desktop is not shown") };
+        open_app(d, &fb, app);
+        Ok(())
+    })
+}
+
 pub fn desk_key(k: Key) -> bool {
     arch::without_interrupts(|| {
         let (Some(d), Some(fb)) = (desk(), state().fb) else { return false };
@@ -730,6 +802,7 @@ pub fn desk_key(k: Key) -> bool {
             NOTES => d.notes.as_mut().map_or(Effect::None, |n| n.key(k)),
             TASKS => d.tasks.as_mut().map_or(Effect::None, |t| t.key(k)),
             HELP => d.help.key(k),
+            SETTINGS => d.settings.key(k),
             _ => return false,
         };
         after_effect(d, &fb, app, e);

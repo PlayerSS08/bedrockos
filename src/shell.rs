@@ -3660,6 +3660,11 @@ fn run_plain(line: &str, hist: &History) {
         }
         "task" => cmd_task(rest),
         "nettest" => cmd_nettest(),
+        "open" => match crate::bootfx::open_named(rest.trim()) {
+            _ if rest.trim().is_empty() => out!("usage: open <notes|tasks|settings|help>\n"),
+            Ok(()) => {}
+            Err(e) => out!("open: {} (apps: notes, tasks, settings, help)\n", e),
+        },
         "calc" | "about" | "neofetch" | "cmds" | "keys" | "uuid" | "rand" | "fortune" | "base64" | "bench" | "todo-today" => cmd_extra(cmd, rest),
         "net" => {
             out!("Host connection (laptop Wi-Fi): the VM's network card, through VirtualBox NAT or Bridged.\n");

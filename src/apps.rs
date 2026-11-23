@@ -495,6 +495,76 @@ impl Tasks {
     }
 }
 
+// ---- Settings ---------------------------------------------------------------------------------------------
+
+/// The pages of the Settings window. Their text comes from the kernel (live values) on every redraw.
+pub const SETTINGS_PAGES: [&str; 4] = ["About", "Network", "System", "Display"];
+
+#[derive(Default)]
+pub struct Settings {
+    pub page: usize,
+}
+
+impl Settings {
+    pub fn key(&mut self, k: Key) -> Effect {
+        match k {
+            Key::Up | Key::Left => self.page = self.page.saturating_sub(1),
+            Key::Down | Key::Right | Key::Tab => self.page = (self.page + 1) % SETTINGS_PAGES.len(),
+            _ => return Effect::None,
+        }
+        Effect::Redraw
+    }
+
+    fn side_w(body: Rect) -> i32 {
+        (body.w / 4).clamp(140, 220)
+    }
+
+    pub fn click(&mut self, body: Rect, f: &Fonts, x: i32, y: i32) -> Effect {
+        if x >= body.x + Self::side_w(body) {
+            return Effect::None;
+        }
+        let row_h = f.sans.height as i32 + 14;
+        let i = (y - body.y - 10) / row_h;
+        if (0..SETTINGS_PAGES.len() as i32).contains(&i) {
+            self.page = i as usize;
+            return Effect::Redraw;
+        }
+        Effect::None
+    }
+
+    /// `lines`: the text of the current page; a line starting with `# ` is a heading.
+    pub fn draw(&self, c: &mut Canvas, body: Rect, f: &Fonts, lines: &[String]) {
+        c.fill_rect(body, BG);
+        let sw = Self::side_w(body);
+        let side = Rect::new(body.x, body.y, sw, body.h);
+        c.fill_rect(side, SIDEBAR);
+        c.fill_rect(Rect::new(side.right() - 1, body.y, 1, body.h), DARK.border);
+        let row_h = f.sans.height as i32 + 14;
+        for (i, name) in SETTINGS_PAGES.iter().enumerate() {
+            let ry = body.y + 10 + i as i32 * row_h;
+            if i == self.page {
+                c.round_rect((body.x + 6) as f32, ry as f32, (sw - 12) as f32, (row_h - 2) as f32, 6.0, SELECTED, 1.0);
+            }
+            text(c, f.sans, body.x + 16, ry + 7, name, DARK.text);
+        }
+        let x = side.right() + 20;
+        let area = Rect::new(x, body.y + 14, body.right() - x - 16, body.h - 28);
+        clipped(c, area, |c| {
+            let mut y = area.y;
+            for l in lines {
+                if let Some(h) = l.strip_prefix("# ") {
+                    y += 6;
+                    text(c, f.sans, x, y, h, DARK.accent);
+                    y += f.sans.height as i32 + 8;
+                } else {
+                    text(c, f.sans, x, y, l, DARK.text);
+                    y += f.sans.height as i32 + 6;
+                }
+            }
+        });
+    }
+}
+
 // ---- Help --------------------------------------------------------------------------------------------------
 
 pub struct Help {

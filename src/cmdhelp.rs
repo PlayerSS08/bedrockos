@@ -41,6 +41,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("network", "net", "net", "network overview: host connection and OS Wi-Fi"),
     c("network", "nettest", "nettest", "check link, address, gateway, DNS, HTTP"),
     c("system", "about", "about", "what BedrockOS is"),
+    c("system", "open", "open <app>", "open notes, tasks, settings or help"),
     c("system", "neofetch", "neofetch", "system summary with a logo"),
     c("system", "cmds", "cmds", "every command, by group"),
     c("system", "keys", "keys", "all keyboard shortcuts"),
