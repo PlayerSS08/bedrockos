@@ -1,0 +1,16 @@
+/target/
+/xtask/target/
+/user/target/
+/out/
+__pycache__/
+*.pyc
+# disk images and VM runtime files
+*.vdi
+*.img
+*.vbox-prev
+*.nvram
+serial.log
+# vendor Wi-Fi firmware blobs are never committed (see docs/WIFI.md once written)
+/firmware/*.bin
+# signing keys
+.secrets/

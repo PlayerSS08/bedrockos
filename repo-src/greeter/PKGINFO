@@ -1,0 +1,4 @@
+Package: greeter
+Version: 1.0
+Depends: greet-data
+Description: Example package that depends on greet-data

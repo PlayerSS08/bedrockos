@@ -1,0 +1,6 @@
+[build]
+target = "x86_64-unknown-none"
+
+[target.x86_64-unknown-none]
+# Programs live above 1 TiB, so addresses do not fit the small code model.
+rustflags = ["-C", "relocation-model=static", "-C", "code-model=large", "-C", "link-arg=-Tlinker.ld", "-C", "link-arg=-zmax-page-size=4096"]

@@ -1,0 +1,23 @@
+Serial: 1
+
+Package: aeon-cheatsheet
+Version: 1.0
+Size: 5120
+SHA256: 77d3a5501fda16271f04b50955a153f40a026ab6f41ea1c1baceca7c450c6ec4
+Filename: pool/aeon-cheatsheet_1.0.tar
+Description: One-page cheat sheet of the most useful Aeon shell commands
+
+Package: greet-data
+Version: 2.1
+Size: 4608
+SHA256: f7cba9ee4b52ae68f074e0700851ffe18536629e853ecd0623f058af12b017be
+Filename: pool/greet-data_2.1.tar
+Description: Greeting phrases used by greeter
+
+Package: greeter
+Version: 1.0
+Depends: greet-data
+Size: 4608
+SHA256: b17c3e929196d727c52403fb6b512f5dd20072a026c778e7da25384b656dc772
+Filename: pool/greeter_1.0.tar
+Description: Example package that depends on greet-data

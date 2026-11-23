@@ -1,0 +1,1 @@
+Hello from the greet-data package, installed over the network and checked against a signed index.

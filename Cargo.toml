@@ -1,0 +1,46 @@
+[package]
+name = "bedrockos"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.86"
+description = "BedrockOS: a small x86_64 UEFI micro-OS with a graphical desktop (based on Aeon 0.11.0)"
+
+[workspace]
+members = [".", "xtask"]
+default-members = ["."]
+exclude = ["user"]
+
+[features]
+# Deliberate-failure switches for exercising the fault paths (TC5).
+fault-ud = []
+fault-pf = []
+fault-stack = []
+fault-wx = []
+fault-nx = []
+fault-panic = []
+# Dumps the TCG event log as hex on the log sinks, to capture a golden fixture for the parser tests.
+dump-eventlog = []
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+# Index loops are deliberate where the index is itself data (task slots, AES rounds, PIDs).
+needless_range_loop = "allow"
+
+[profile.dev]
+panic = "abort"
+opt-level = "s"
+overflow-checks = true
+debug = true
+
+[profile.release]
+opt-level = "s"
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+overflow-checks = true
+debug = false
+strip = "debuginfo"

@@ -1,0 +1,9 @@
+AEON QUICK CHEAT SHEET
+  help / help all       commands, grouped / with descriptions
+  dhcp                  get an IP address on the cable (Ethernet)
+  curl <url> [-o file]  download over http (names work; no https yet)
+  sha256sum <file>      check a download
+  apt update            fetch the signed package list
+  apt install <pkg>     install a package and what it needs
+  ls cd cat write edit  files (RAM; /usb/... is the AEON stick, saved for good)
+  usb mouse pci cpu     what hardware Aeon found

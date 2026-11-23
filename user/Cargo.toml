@@ -1,0 +1,40 @@
+[package]
+name = "aeonrt"
+version = "0.11.0"
+edition = "2024"
+description = "Aeon user-space runtime and programs (no_std, static ELF, run by the Aeon kernel)"
+
+# Not part of the kernel's build: its own workspace and target.
+[workspace]
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "hello"
+path = "src/bin/hello.rs"
+[[bin]]
+name = "echo"
+path = "src/bin/echo.rs"
+[[bin]]
+name = "cat"
+path = "src/bin/cat.rs"
+[[bin]]
+name = "wc"
+path = "src/bin/wc.rs"
+[[bin]]
+name = "ls"
+path = "src/bin/ls.rs"
+[[bin]]
+name = "forktest"
+path = "src/bin/forktest.rs"
+
+[profile.release]
+opt-level = "s"
+lto = false
+codegen-units = 1
+panic = "abort"
+strip = "debuginfo"
+
+[profile.dev]
+panic = "abort"

@@ -1,0 +1,3 @@
+greeter 1.0
+Its data lives in /usr/share/greet/en.txt (package greet-data).
+Try: cat /usr/share/greet/en.txt
