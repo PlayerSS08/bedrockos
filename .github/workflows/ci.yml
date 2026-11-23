@@ -1,0 +1,22 @@
+# Lint, host unit tests and the UEFI build + disk image on every push. VirtualBox boot tests
+# (tests/vbox_boot.py) need a machine with VirtualBox and run locally.
+name: ci
+on:
+  push:
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Rust with clippy and the UEFI target
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy --target x86_64-unknown-uefi
+          rustup default stable
+      - run: cargo xtask clippy
+      - run: cargo xtask test
+      - run: cargo xtask build
+      - name: Kernel size
+        run: ls -l out/bedrockos.efi
