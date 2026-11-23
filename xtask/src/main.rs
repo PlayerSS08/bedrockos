@@ -1,7 +1,7 @@
 //! BedrockOS build driver. Runs on the host (Windows, Linux or macOS), never inside the OS.
 //!
 //! ```text
-//! cargo xtask build      release kernel -> out/bedrockos.efi, out/usb/, out/bedrockos.img, out/bedrockos.vdi
+//! cargo xtask build      release kernel -> out/bedrockos.efi, out/usb/, out/bedrockos.img, out/bedrockos.iso, out/bedrockos.vdi
 //! cargo xtask test       host unit tests of the library
 //! cargo xtask clippy     clippy -D warnings for the UEFI build and the host library
 //! cargo xtask all        clippy + test + build
@@ -95,6 +95,8 @@ fn build() -> Result<(), String> {
 
     let img = out.join("bedrockos.img");
     run(Command::new(python()?).arg(r.join("tools/mkimage.py")).arg(&usb).arg(&img))?;
+    // A bootable CD/DVD image (UEFI El Torito) for sharing and for VMs without a disk.
+    run(Command::new(python()?).arg(r.join("tools/mkiso.py")).arg(&usb).arg(out.join("bedrockos.iso")))?;
 
     match vboxmanage() {
         Some(vbm) => {
@@ -108,7 +110,7 @@ fn build() -> Result<(), String> {
         }
         None => eprintln!("VBoxManage not found: skipped out/bedrockos.vdi (the .img and usb/ folder are ready)"),
     }
-    eprintln!("\nready:\n  out/bedrockos.efi\n  out/usb/        (copy to a FAT32 USB stick)\n  out/bedrockos.img\n  out/bedrockos.vdi (if VirtualBox is installed)");
+    eprintln!("\nready:\n  out/bedrockos.efi\n  out/usb/        (copy to a FAT32 USB stick)\n  out/bedrockos.img\n  out/bedrockos.iso (bootable CD image)\n  out/bedrockos.vdi (if VirtualBox is installed)");
     Ok(())
 }
 
