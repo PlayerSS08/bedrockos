@@ -5,16 +5,7 @@ title BedrockOS launcher
 set "REPO=D:\BedrockOS\bedrockos"
 set "VBM=C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
 
-rem 1. The helper, in its own minimised window (skipped when it already runs: port 8086 is taken).
-netstat -ano | findstr /r /c:":8086 .*LISTENING" >nul
-if errorlevel 1 (
-    echo Starting the BedrockOS helper...
-    start "BedrockOS helper - keep this open" /min /d "%REPO%" python tools\bedrock-host.py
-) else (
-    echo The helper is already running.
-)
-
-rem 2. The VM (skipped when it already runs).
+rem 1. The VM (skipped when it already runs).
 "%VBM%" list runningvms | findstr /c:"\"BedrockOS\"" >nul
 if errorlevel 1 (
     echo Starting the BedrockOS virtual machine...
@@ -29,6 +20,16 @@ if errorlevel 1 (
     )
 ) else (
     echo BedrockOS is already running - look for its VirtualBox window.
+)
+
+rem 2. The helper, started after the VM has opened its COM2 pipe, in its own minimised window (skipped when it already runs: port 8086 is taken).
+netstat -ano | findstr /r /c:":8086 .*LISTENING" >nul
+if errorlevel 1 (
+    echo Starting the BedrockOS helper...
+    timeout /t 5 /nobreak >nul
+    start "BedrockOS helper - keep this open" /min /d "%REPO%" python tools\bedrock-host.py
+) else (
+    echo The helper is already running.
 )
 
 echo.

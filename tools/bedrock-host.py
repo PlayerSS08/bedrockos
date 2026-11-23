@@ -138,6 +138,8 @@ def wifi_loop():
                     lines = ["ERR unknown command"]
                 else:
                     continue
+                # The protocol separates fields with tabs: "OK<tab>text", "ERR<tab>text".
+                lines = [re.sub(r"^(OK|ERR) ", "\\1\t", l) for l in lines]
                 f.write(("\n".join(lines) + "\n").encode("utf-8"))
         except OSError as e:
             print(f"[wifi] pipe closed ({e}); waiting for the VM", flush=True)

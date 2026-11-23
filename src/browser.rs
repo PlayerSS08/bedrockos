@@ -305,7 +305,7 @@ pub fn parse(html: &str, base: &str) -> Page {
                     b.words(&format!("[{}]", alt.trim()), false);
                 }
             }
-            "input" if !closing => {
+            "input" if !closing && !attr(body, "type").is_some_and(|t| t.eq_ignore_ascii_case("hidden")) => {
                 if let Some(v) = attr(body, "value").filter(|a| !a.trim().is_empty()) {
                     b.words(&format!("[{}]", v.trim()), false);
                 }
@@ -672,7 +672,7 @@ mod tests {
         let p = parse(
             "<html><head><title>T &amp; U</title><style>p{}</style><script>var a='<p>';</script></head>\
              <body><h1>Head</h1><p>Hello&nbsp;<a href='/x'>the link</a> &#8212; done</p><ul><li>one<li>two</ul>\
-             <!-- <p>hidden</p> --><img alt=\"a cat\"></body></html>",
+             <!-- <p>hidden</p> --><input type=hidden value=\"secret\"><img alt=\"a cat\"></body></html>",
             "http://h.com/dir/page",
         );
         assert_eq!(p.title, "T & U");
