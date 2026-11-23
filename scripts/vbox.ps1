@@ -50,6 +50,7 @@ function New-BedrockVM {
         --graphicscontroller vmsvga --vram 128 --audio-driver none `
         --usbxhci on --mouse usbtablet --keyboard ps2 `
         --uart1 0x3F8 4 --uart-mode1 file $Serial `
+        --uart2 0x2F8 3 --uart-mode2 server \\.\pipe\bedrockos-wifi `
         --boot1 disk --boot2 none --boot3 none --boot4 none
     VB storagectl $VM --name SATA --add sata --controller IntelAhci --portcount 2
 }
