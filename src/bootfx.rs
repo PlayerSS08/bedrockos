@@ -32,6 +32,8 @@ static DIRTY: Global<Dirty> = Global::new(Dirty::new());
 const FRAME_US: u64 = 33_000;
 const INTRO_MS: u32 = 900;
 const STATUS_MAX: usize = 96;
+/// How long a panel message stays up.
+const MESSAGE_US: u64 = 3_000_000;
 
 struct State {
     active: bool,
@@ -60,6 +62,8 @@ struct State {
     drag: Option<(i32, i32)>,
     /// When the window was last redrawn during a drag (TSC).
     drag_drawn: u64,
+    /// When the panel message was shown (TSC), while one is on screen.
+    msg_at: Option<u64>,
 }
 
 static STATE: Global<State> = Global::new(State {
@@ -82,6 +86,7 @@ static STATE: Global<State> = Global::new(State {
     dp_buttons: 0,
     drag: None,
     drag_drawn: 0,
+    msg_at: None,
 });
 
 fn state() -> &'static mut State {
@@ -293,6 +298,9 @@ pub fn panel_tick() {
 fn panel_tick_inner() {
     let s = state();
     let (Some(l), Some(fb)) = (s.desk, s.fb) else { return };
+    if s.msg_at.is_some_and(|t| us_since(t) >= MESSAGE_US) {
+        show_message(&fb, &l, "");
+    }
     let min = crate::rtc::now().map_or(0, |t| u32::from(t.hour) * 60 + u32::from(t.min));
     if min == s.clock_min {
         return;
@@ -340,6 +348,11 @@ pub fn desk_pointer(dx: i32, dy: i32, buttons: u8) {
         if left && !was_left && l.title_bar().contains(x, y) {
             s.drag = Some((x - l.window.x, y - l.window.y));
             s.drag_drawn = 0;
+        } else if left && !was_left {
+            if let Some(app) = l.dock_hit(x, y) {
+                let mut mbuf = [0u8; 48];
+                show_message(&fb, &l, desktop::dock_message(&mut mbuf, app));
+            }
         }
         let mut l = l;
         if let Some((gx, gy)) = s.drag {
@@ -386,7 +399,31 @@ fn move_window(fb: &FbInfo, to: DeskLayout) {
     let base = fb.base + ((t.y as usize * fb.stride + t.x as usize) * 4) as u64;
     // SAFETY: `DeskLayout::moved` keeps the window, and so the terminal rectangle, inside the screen.
     let _ = log::with_console(|c| unsafe { c.relocate(base) });
-    state().desk = Some(to);
+    let s = state();
+    s.desk = Some(to);
+    // The full redraw cleared the panel message.
+    s.msg_at = None;
+}
+
+/// Shows `msg` in the middle of the panel for a few seconds (`panel_tick` clears it); "" clears it now.
+/// Called with interrupts off (pointer handler, status task).
+fn show_message(fb: &FbInfo, l: &DeskLayout, msg: &str) {
+    let (w, h) = (fb.width, fb.height);
+    // SAFETY: after boot BACK holds the desktop and is only used with interrupts off (caller).
+    let back = unsafe { BACK.get() };
+    {
+        let Some(mut c) = Canvas::new(&mut back[..w * h], w, h, w) else { return };
+        desktop::draw_message(&mut c, l, msg);
+    }
+    blit(fb, &back[..w * h], w, l.message);
+    let s = state();
+    s.msg_at = if msg.is_empty() { None } else { Some(arch::rdtsc()) };
+    // The area was copied over the pointer: paint it again.
+    if let Some((x, y)) = s.dp_shown {
+        if !l.message.intersect(&Rect::new(x, y, pointer::SPRITE_W as i32, pointer::SPRITE_H as i32)).is_empty() {
+            sprite(fb, l, x, y);
+        }
+    }
 }
 
 /// Paints the arrow at (`x`, `y`) on the framebuffer, except over the terminal text (the console's).

@@ -6,6 +6,7 @@
 
 use crate::gfont;
 use crate::gui::canvas::{self, rgb, Canvas, Color, Rect};
+use crate::gui::math;
 use crate::gui::theme::DARK;
 
 /// The console's background (black), so the window body matches the text area exactly.
@@ -25,7 +26,27 @@ pub struct DeskLayout {
     pub term: Rect,
     /// Where the clock text is drawn in the panel (redrawn every few seconds).
     pub clock: Rect,
+    /// The dock at the bottom (the app launcher).
+    pub dock: Rect,
+    /// Size of one dock icon tile, in pixels.
+    pub icon: i32,
+    /// The middle of the panel, for short messages.
+    pub message: Rect,
 }
+
+/// The apps of the dock, in order, and the milestone that builds each one (`None` = available now).
+pub const APPS: [(&str, Option<u8>); 7] = [
+    ("Notes", Some(6)),
+    ("Tasks", Some(6)),
+    ("Browser", Some(9)),
+    ("Terminal", None),
+    ("Wi-Fi", Some(8)),
+    ("Settings", Some(10)),
+    ("Help", Some(10)),
+];
+
+/// Index of the Terminal in [`APPS`].
+pub const TERMINAL: usize = 3;
 
 impl DeskLayout {
     pub fn new(w: usize, h: usize) -> DeskLayout {
@@ -36,19 +57,38 @@ impl DeskLayout {
         // The window takes most of the screen below the panel, with a margin that shows the wallpaper.
         let margin_x = (wi / 14).clamp(16, 160);
         let top = panel_h + (hi / 22).clamp(12, 60);
-        let bottom_margin = (hi / 18).clamp(12, 70);
-        let window = Rect::new(margin_x, top, wi - 2 * margin_x, hi - top - bottom_margin);
+        // Dock: a row of icon tiles centred at the bottom, floating a little above the edge.
+        let icon = if big { 56 } else { 44 };
+        let gap = icon / 4;
+        let n = APPS.len() as i32;
+        let dock_w = n * icon + (n - 1) * gap + 2 * gap;
+        let dock_h = icon + 2 * (gap * 3 / 4);
+        let dock = Rect::new((wi - dock_w) / 2, hi - dock_h - gap, dock_w, dock_h);
+        let window = Rect::new(margin_x, top, wi - 2 * margin_x, dock.y - gap - top);
         let title_h = if big { 40 } else { 32 };
         let body = Rect::new(window.x + 1, window.y + title_h, window.w - 2, window.h - title_h - 10);
         let pad = if big { 12 } else { 8 };
         let term = Rect::new(body.x + pad, body.y + pad / 2, body.w - 2 * pad, body.h - pad / 2);
         let clock_w = if big { 360 } else { 260 };
         let clock = Rect::new(wi - clock_w - 12, 0, clock_w, panel_h);
-        DeskLayout { w: wi, h: hi, panel, window, title_h, body, term, clock }
+        let message = Rect::new(wi / 2 - wi / 5, 0, 2 * (wi / 5), panel_h);
+        DeskLayout { w: wi, h: hi, panel, window, title_h, body, term, clock, dock, icon, message }
     }
 
     fn big(&self) -> bool {
         self.w >= 1600
+    }
+
+    /// The tile of dock icon `i`.
+    pub fn dock_item(&self, i: usize) -> Rect {
+        let gap = self.icon / 4;
+        let x = self.dock.x + gap + i as i32 * (self.icon + gap);
+        Rect::new(x, self.dock.y + (self.dock.h - self.icon) / 2, self.icon, self.icon)
+    }
+
+    /// Which dock icon is at (`x`, `y`), if any.
+    pub fn dock_hit(&self, x: i32, y: i32) -> Option<usize> {
+        (0..APPS.len()).find(|&i| self.dock_item(i).contains(x, y))
     }
 
     /// The title bar, where the window is grabbed to move it.
@@ -60,7 +100,7 @@ impl DeskLayout {
     /// the panel (the console inside it must stay within the framebuffer).
     pub fn moved(&self, x: i32, y: i32) -> DeskLayout {
         let x = x.clamp(0, (self.w - self.window.w).max(0));
-        let y = y.clamp(self.panel.bottom(), (self.h - self.window.h).max(self.panel.bottom()));
+        let y = y.clamp(self.panel.bottom(), (self.dock.y - self.window.h).max(self.panel.bottom()));
         let (dx, dy) = (x - self.window.x, y - self.window.y);
         let shift = |r: Rect| Rect::new(r.x + dx, r.y + dy, r.w, r.h);
         DeskLayout { window: shift(self.window), body: shift(self.body), term: shift(self.term), ..*self }
@@ -99,6 +139,110 @@ pub fn draw(c: &mut Canvas, l: &DeskLayout, clock: &str) {
     wallpaper(c, l);
     panel(c, l, clock);
     window_frame(c, l, "Terminal");
+    dock(c, l);
+}
+
+fn dock(c: &mut Canvas, l: &DeskLayout) {
+    let d = l.dock;
+    let (x, y, w, h) = (d.x as f32, d.y as f32, d.w as f32, d.h as f32);
+    let r = l.icon as f32 * 0.4;
+    c.shadow(x, y + 4.0, w, h, r, 18.0, 0, 0.45);
+    c.round_rect(x, y, w, h, r, rgb(22, 27, 44), 0.82);
+    c.round_rect_stroke(x + 0.5, y + 0.5, w - 1.0, h - 1.0, r, 1.0, rgb(70, 82, 116), 0.7);
+    for i in 0..APPS.len() {
+        icon(c, l.dock_item(i), i);
+    }
+    // A dot under the running app.
+    let t = l.dock_item(TERMINAL);
+    c.circle(t.x as f32 + t.w as f32 / 2.0, (t.bottom() + (d.bottom() - t.bottom()) / 2) as f32, 2.5, DARK.text, 0.9);
+}
+
+/// One app icon, drawn from shapes on a coloured rounded tile.
+fn icon(c: &mut Canvas, t: Rect, app: usize) {
+    let (x, y, s) = (t.x as f32, t.y as f32, t.w as f32);
+    let (top, bottom) = match app {
+        0 => (rgb(255, 214, 102), rgb(240, 170, 60)),  // Notes: yellow
+        1 => (rgb(110, 220, 150), rgb(50, 170, 100)),  // Tasks: green
+        2 => (rgb(110, 176, 255), rgb(60, 110, 230)),  // Browser: blue
+        3 => (rgb(70, 78, 100), rgb(36, 40, 56)),      // Terminal: graphite
+        4 => (rgb(100, 226, 214), rgb(40, 170, 170)),  // Wi-Fi: teal
+        5 => (rgb(170, 176, 196), rgb(110, 118, 140)), // Settings: grey
+        _ => (rgb(196, 140, 255), rgb(130, 80, 220)),  // Help: violet
+    };
+    c.round_rect_vgrad(x, y, s, s, s * 0.24, top, bottom, 1.0);
+    let (cx, cy) = (x + s / 2.0, y + s / 2.0);
+    let white = rgb(255, 255, 255);
+    let ink = rgb(40, 44, 60);
+    match app {
+        0 => {
+            // A page with ruled lines.
+            c.round_rect(x + s * 0.26, y + s * 0.2, s * 0.48, s * 0.6, s * 0.06, white, 1.0);
+            for k in 0..4 {
+                c.round_rect(x + s * 0.33, y + s * (0.32 + 0.11 * k as f32), s * 0.34, s * 0.04, s * 0.02, rgb(200, 170, 110), 1.0);
+            }
+        }
+        1 => {
+            // Three rows: a checkbox dot and a bar.
+            for k in 0..3 {
+                let ry = y + s * (0.3 + 0.2 * k as f32);
+                c.circle(x + s * 0.3, ry, s * 0.065, white, 1.0);
+                c.round_rect(x + s * 0.42, ry - s * 0.035, s * 0.34, s * 0.07, s * 0.035, white, 0.9);
+            }
+        }
+        2 => {
+            // A globe: outline ring, an equator and a meridian.
+            c.arc(cx, cy, s * 0.26, s * 0.06, 1.0, white, 1.0);
+            c.round_rect(cx - s * 0.26, cy - s * 0.025, s * 0.52, s * 0.05, 0.0, white, 0.9);
+            c.round_rect(cx - s * 0.025, cy - s * 0.26, s * 0.05, s * 0.52, 0.0, white, 0.9);
+        }
+        3 => {
+            // A prompt: ">" and a cursor bar.
+            let f = &gfont::MONO;
+            c.text(f, (x + s * 0.24) as i32, (cy - f.height as f32 / 2.0) as i32, ">", rgb(110, 236, 214), 1.0);
+            c.round_rect(x + s * 0.5, cy + s * 0.08, s * 0.22, s * 0.06, 0.0, white, 0.9);
+        }
+        4 => {
+            // Three arcs fanning out from a dot near the bottom.
+            let by = y + s * 0.72;
+            c.circle(cx, by, s * 0.06, white, 1.0);
+            for k in 1..=3 {
+                c.arc_from(cx, by, s * 0.16 * k as f32, s * 0.06, -0.125, 0.25, white, 1.0);
+            }
+        }
+        5 => {
+            // A gear: a ring with eight teeth.
+            for k in 0..8 {
+                let a = k as f32 * math::TAU / 8.0;
+                c.circle(cx + math::sin(a) * s * 0.25, cy - math::cos(a) * s * 0.25, s * 0.07, ink, 1.0);
+            }
+            c.arc(cx, cy, s * 0.18, s * 0.12, 1.0, ink, 1.0);
+        }
+        _ => {
+            // A question mark.
+            let f = if s >= 50.0 { &gfont::SANS_24 } else { &gfont::SANS_16 };
+            let tw = canvas::text_width(f, "?", 0);
+            c.text(f, (cx - tw as f32 / 2.0) as i32, (cy - f.height as f32 / 2.0) as i32, "?", white, 1.0);
+        }
+    }
+}
+
+/// Shows `msg` in the middle of the panel, or clears that area when it is empty.
+pub fn draw_message(c: &mut Canvas, l: &DeskLayout, msg: &str) {
+    let r = l.message;
+    c.set_clip(r);
+    let hh = l.h.max(1) as u32;
+    let (top, bottom) = (DARK.bg_top, DARK.bg_bottom);
+    c.fill_rows(r, |y| canvas::mix256(top, bottom, y.max(0) as u32 * 256 / hh));
+    let (w, h) = (l.w as f32, l.h as f32);
+    c.glow(w * 0.85, h * 0.2, h * 0.8, DARK.accent, 0.18);
+    c.blend_rect(r, rgb(8, 10, 20), 0.72);
+    c.fill_rect(Rect::new(r.x, l.panel.bottom() - 1, r.w, 1), rgb(48, 58, 86));
+    if !msg.is_empty() {
+        let f = face(l.big());
+        let tw = canvas::text_width(f, msg, 0);
+        c.text(f, r.x + (r.w - tw) / 2, r.y + (l.panel.h - f.height as i32) / 2, msg, DARK.warn, 1.0);
+    }
+    c.reset_clip();
 }
 
 fn wallpaper(c: &mut Canvas, l: &DeskLayout) {
@@ -191,6 +335,33 @@ pub fn clock_text<'a>(buf: &'a mut [u8; 28], weekday: &str, day: u8, month: &str
     core::str::from_utf8(&buf[..n]).unwrap_or("")
 }
 
+/// The panel message for a click on dock icon `app`: the Terminal is already open; the other apps say which
+/// milestone brings them.
+pub fn dock_message(buf: &mut [u8; 48], app: usize) -> &str {
+    let Some(&(name, ms)) = APPS.get(app) else { return "" };
+    let mut n = 0;
+    let mut put = |b: &[u8]| {
+        for &x in b {
+            if n < buf.len() {
+                buf[n] = x;
+                n += 1;
+            }
+        }
+    };
+    put(name.as_bytes());
+    match ms {
+        None => put(b" is open"),
+        Some(m) => {
+            put(b" arrives in milestone ");
+            if m >= 10 {
+                put(&[b'0' + m / 10 % 10]);
+            }
+            put(&[b'0' + m % 10]);
+        }
+    }
+    core::str::from_utf8(&buf[..n]).unwrap_or("")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -265,16 +436,51 @@ mod tests {
     fn moving_the_window_keeps_it_on_screen_and_carries_the_terminal() {
         let l = DeskLayout::new(1024, 768);
         let m = l.moved(l.window.x + 40, l.window.y + 30);
-        assert_eq!((m.window.x, m.window.y), (l.window.x + 40, l.window.y + 30));
+        // Down is limited by the dock: the window may not cover it.
+        assert_eq!((m.window.x, m.window.y), (l.window.x + 40, (l.window.y + 30).min(l.dock.y - l.window.h)));
         assert_eq!((m.term.x - m.window.x, m.term.y - m.window.y), (l.term.x - l.window.x, l.term.y - l.window.y));
         assert_eq!((m.term.w, m.term.h), (l.term.w, l.term.h), "same size");
         let far = l.moved(5000, 5000);
         assert_eq!(far.window.right(), 1024);
-        assert_eq!(far.window.bottom(), 768);
+        assert_eq!(far.window.bottom(), l.dock.y);
         let up = l.moved(-50, -50);
         assert_eq!((up.window.x, up.window.y), (0, l.panel.bottom()), "not over the panel");
         assert!(l.title_bar().contains(l.window.x + 50, l.window.y + 5));
         assert!(!l.title_bar().contains(l.term.x + 5, l.term.y + 5));
+    }
+
+    #[test]
+    fn dock_fits_below_the_window_and_hits_its_icons() {
+        for &(w, h) in &[(1024, 768), (1280, 720), (1920, 1080)] {
+            let l = DeskLayout::new(w, h);
+            let screen = Rect::new(0, 0, w as i32, h as i32);
+            assert_eq!(l.dock.intersect(&screen), l.dock, "{w}x{h}");
+            assert!(l.window.bottom() <= l.dock.y, "window above the dock at {w}x{h}");
+            for i in 0..APPS.len() {
+                let t = l.dock_item(i);
+                assert_eq!(l.dock.intersect(&t), t, "icon {i} inside the dock");
+                assert_eq!(l.dock_hit(t.x + t.w / 2, t.y + t.h / 2), Some(i));
+            }
+            assert_eq!(l.dock_hit(l.dock.x + 1, l.dock.y + 1), None, "dock padding is not an icon");
+            assert!(l.moved(l.window.x, 10_000).window.bottom() <= l.dock.y, "dragging cannot cover the dock");
+            assert!(l.message.intersect(&l.clock).is_empty(), "message area clear of the clock");
+        }
+        assert_eq!(APPS[TERMINAL], ("Terminal", None));
+    }
+
+    #[test]
+    fn dock_messages() {
+        let mut b = [0u8; 48];
+        assert_eq!(dock_message(&mut b, 0), "Notes arrives in milestone 6");
+        assert_eq!(dock_message(&mut b, TERMINAL), "Terminal is open");
+        assert_eq!(dock_message(&mut b, 5), "Settings arrives in milestone 10");
+        assert_eq!(dock_message(&mut b, 99), "");
+        // Every message fits the panel's message area at the smallest supported screen.
+        let l = DeskLayout::new(1024, 768);
+        for i in 0..APPS.len() {
+            let m = dock_message(&mut b, i);
+            assert!(canvas::text_width(face(false), m, 0) <= l.message.w, "{m}");
+        }
     }
 
     #[test]

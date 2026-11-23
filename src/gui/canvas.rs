@@ -417,6 +417,12 @@ impl<'a> Canvas<'a> {
     /// A ring of radius `r` and thickness `t`, drawn from 12 o'clock clockwise over `frac` (0..=1) of the
     /// circle, anti-aliased (countdowns and spinners; small, so the angle test uses floats).
     pub fn arc(&mut self, cx: f32, cy: f32, r: f32, t: f32, frac: f32, c: Color, a: f32) {
+        self.arc_from(cx, cy, r, t, 0.0, frac, c, a);
+    }
+
+    /// Like [`Canvas::arc`], starting at `start` (a fraction of the circle, clockwise from 12 o'clock; it may
+    /// be negative) instead of at 12 o'clock.
+    pub fn arc_from(&mut self, cx: f32, cy: f32, r: f32, t: f32, start: f32, frac: f32, c: Color, a: f32) {
         let frac = math::clamp01(frac);
         if frac <= 0.0 {
             return;
@@ -436,9 +442,12 @@ impl<'a> Canvas<'a> {
                 256
             } else {
                 // Angle from 12 o'clock, clockwise, in 0..TAU; soft end over about one pixel of arc length.
-                let mut ang = math::atan2(dx as f32, -dy as f32);
-                if ang < 0.0 {
+                let mut ang = math::atan2(dx as f32, -dy as f32) - start * math::TAU;
+                while ang < 0.0 {
                     ang += math::TAU;
+                }
+                while ang >= math::TAU {
+                    ang -= math::TAU;
                 }
                 unit256((end - ang) * (dist as f32 / ONE as f32) + 0.5)
             };
@@ -593,6 +602,18 @@ mod tests {
         assert!(c.get(40, 13) & 0xFF > 128, "upper right lit");
         assert_eq!(c.get(24, 13) & 0xFF, 0, "upper left dark");
         assert_eq!(c.get(32, 52) & 0xFF, 0, "bottom dark");
+    }
+
+    #[test]
+    fn arc_from_rotates_the_start() {
+        let mut b = Vec::new();
+        let mut c = canvas(&mut b, 64, 64);
+        // From 10:30 to 1:30 (a quarter centred on 12 o'clock): the top is lit, the right side is not.
+        c.arc_from(32.0, 32.0, 20.0, 4.0, -0.125, 0.25, 0xFF, 1.0);
+        assert!(c.get(32, 12) & 0xFF > 128, "top lit");
+        assert!(c.get(25, 13) & 0xFF > 100, "left of top lit");
+        assert_eq!(c.get(52, 32) & 0xFF, 0, "3 o'clock dark");
+        assert_eq!(c.get(32, 52) & 0xFF, 0, "6 o'clock dark");
     }
 
     #[test]

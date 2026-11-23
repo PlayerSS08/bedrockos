@@ -6,7 +6,7 @@ unit-tested on the host, not yet re-verified in BedrockOS beyond booting · **no
 
 No feature has been tested on real hardware (USB stick on a PC) yet.
 
-Last update: 2026-11-23, milestone 3 (first part).
+Last update: 2026-11-23, milestone 3 (part 5: dock).
 
 | Feature | Status | How it was checked |
 |---|---|---|
@@ -15,7 +15,7 @@ Last update: 2026-11-23, milestone 3 (first part).
 | VirtualBox scripts (`scripts/vbox.ps1`, `.bat`, `.sh`) | done (Windows); `.sh` untested | `vbox.ps1` created the VM and booted it; `vbox.sh` written, not run (no Linux/macOS host here) |
 | Boot in VirtualBox to the shell, 1024x768 and 1920x1080 | done, untested on hardware | `tests/vbox_boot.py`: 10/10 checks (serial markers, no panic, screenshot size, non-blank) |
 | Screen mode: keep firmware's mode when it is ≥1024x720 | done | unit test + VirtualBox at both sizes (before: VirtualBox's 7680x4320 was chosen) |
-| Host unit tests | done | `cargo xtask test`: 717 passed, 2 ignored (preview image writers) |
+| Host unit tests | done | `cargo xtask test`: 722 passed, 3 ignored (preview image writers) |
 | Clippy `-D warnings` (UEFI build and host library) | done | `cargo xtask clippy` clean |
 | Kernel: paging W^X, LAPIC timer, preemptive scheduler, ring 3, fork/exec/pipes | inherited | boots in VirtualBox (`lapic timer ok hz=100`, scheduler tasks start) |
 | e1000 driver | inherited | bound in VirtualBox (`net bound Intel e1000 (8086:100e)`); DHCP not yet re-checked |
@@ -34,6 +34,7 @@ Last update: 2026-11-23, milestone 3 (first part).
 | Shell inside the Terminal window (keyboard input, scrolling, status bar) | done | VirtualBox: inherited console placed in the window rectangle |
 | Panel clock | partial: shows **UTC** (no time zone setting yet), updates every minute | VirtualBox screenshot; minute change not watched |
 | Move the Terminal window by dragging its title bar | done | VirtualBox: pointer moved onto the title bar, button pressed, dragged, released (all injected with `PutMouseEvent`); screenshots show the window in its new place with its text redrawn, and typed output appears there |
+| Dock: seven app icons (Notes, Tasks, Browser, Terminal, Wi-Fi, Settings, Help) at the bottom; clicking one shows a panel message for about 3 s ("Terminal is open", others "<App> arrives in milestone N") | done, untested on hardware; the apps themselves are **not done** | VirtualBox: Notes clicked at 1920x1080 and Terminal at 1024x768 (pointer moved and clicked with `PutMouseEvent`); screenshots show the message, and 4 s later it is gone. Unit tests: icon hit areas, message texts and widths, window cannot be dragged over the dock |
 | Window manager: resize, focus, several windows, close/minimise buttons | not done (the three title-bar dots do nothing yet) | rest of milestone 3 |
 | USB mouse in VirtualBox | done | Fixed the inherited xHCI driver: VirtualBox's USB mouse stalls SET_PROTOCOL and SET_IDLE; endpoint 0 is now reset after a stall and the mouse is used anyway. Checked: `USB mouse ready` in the log; movement injected with the VirtualBox COM API (`PutMouseEvent`) arrives as reports and moves the pointer (`mouse` command and screenshot) |
 | Mouse pointer on the whole desktop | done | VirtualBox: movement injected with `PutMouseEvent`; screenshots show the pointer inside the Terminal window (drawn by the console) and on the top panel (drawn by the desktop), with nothing left behind when it crosses between them. Clicks are read but do nothing yet. Inherited glitch: a small pointer fragment can stay behind when text is drawn under the pointer |
