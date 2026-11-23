@@ -4,10 +4,15 @@ rem Works from anywhere (for example a copy on the Desktop).
 title BedrockOS launcher
 set "REPO=D:\BedrockOS\bedrockos"
 set "VBM=C:\Program Files\Oracle\VirtualBox\VBoxManage.exe"
+set "VDI=%REPO%\out\bedrockos.vdi"
 
 rem 1. The VM (skipped when it already runs).
 "%VBM%" list runningvms | findstr /c:"\"BedrockOS\"" >nul
 if errorlevel 1 (
+    rem A rebuild gives the disk a new ID; re-attach it so VirtualBox accepts it.
+    "%VBM%" storageattach BedrockOS --storagectl SATA --port 0 --device 0 --medium none >nul 2>&1
+    "%VBM%" closemedium disk "%VDI%" >nul 2>&1
+    "%VBM%" storageattach BedrockOS --storagectl SATA --port 0 --device 0 --type hdd --medium "%VDI%"
     echo Starting the BedrockOS virtual machine...
     "%VBM%" startvm BedrockOS --type gui
     if errorlevel 1 (
