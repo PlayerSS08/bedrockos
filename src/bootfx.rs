@@ -1,4 +1,4 @@
-//! The animated boot screen on real hardware: owns the back buffer, turns real boot stages into the status
+﻿//! The animated boot screen on real hardware: owns the back buffer, turns real boot stages into the status
 //! line and progress bar, paces frames at about 30 per second, and copies only changed rectangles to the
 //! framebuffer (drawing happens off-screen, so nothing flickers). The picture itself is `bootscene` (pure,
 //! host-tested).
@@ -278,7 +278,7 @@ fn enter_desktop() -> bool {
     log::attach_console(con);
     s.desk = Some(l);
     s.clock_min = u32::MAX;
-    crate::info!("desktop", "desktop shown; terminal window {}x{} at ({}, {})", t.w, t.h, t.x, t.y);
+    crate::info!("desktop", "desktop shown; ChatBox window, text area {}x{} at ({}, {})", t.w, t.h, t.x, t.y);
     true
 }
 
@@ -382,7 +382,7 @@ pub fn desk_pointer(dx: i32, dy: i32, buttons: u8) {
     });
 }
 
-/// Moves the Terminal window to `to`: redraws the desktop with the window there, then moves the console and
+/// Moves the ChatBox window to `to`: redraws the desktop with the window there, then moves the console and
 /// lets it repaint its text from its history.
 fn move_window(fb: &FbInfo, to: DeskLayout) {
     let (w, h) = (fb.width, fb.height);

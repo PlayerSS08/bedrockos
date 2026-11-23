@@ -1,4 +1,4 @@
-//! The desktop picture: wallpaper, the top panel (name, clock) and the frame of the Terminal window, whose
+﻿//! The desktop picture: wallpaper, the top panel (name, clock) and the frame of the ChatBox window, whose
 //! inside is left to the text console. Pure: it draws into a [`Canvas`]; the kernel copies the result to
 //! the screen and places the console in [`DeskLayout::term`].
 //!
@@ -39,14 +39,14 @@ pub const APPS: [(&str, Option<u8>); 7] = [
     ("Notes", Some(6)),
     ("Tasks", Some(6)),
     ("Browser", Some(9)),
-    ("Terminal", None),
+    ("ChatBox", None),
     ("Wi-Fi", Some(8)),
     ("Settings", Some(10)),
     ("Help", Some(10)),
 ];
 
-/// Index of the Terminal in [`APPS`].
-pub const TERMINAL: usize = 3;
+/// Index of ChatBox (the window holding the shell) in [`APPS`].
+pub const CHATBOX: usize = 3;
 
 impl DeskLayout {
     pub fn new(w: usize, h: usize) -> DeskLayout {
@@ -84,6 +84,13 @@ impl DeskLayout {
         let gap = self.icon / 4;
         let x = self.dock.x + gap + i as i32 * (self.icon + gap);
         Rect::new(x, self.dock.y + (self.dock.h - self.icon) / 2, self.icon, self.icon)
+    }
+
+    /// The three title-bar buttons, left to right: minimise, maximise, close (full title-bar height).
+    pub fn title_buttons(&self) -> [Rect; 3] {
+        let bw = self.title_h * 3 / 2;
+        let right = self.window.right() - 1;
+        [2, 1, 0].map(|k| Rect::new(right - (k + 1) * bw, self.window.y + 1, bw, self.title_h - 2))
     }
 
     /// Which dock icon is at (`x`, `y`), if any.
@@ -138,7 +145,7 @@ pub fn draw(c: &mut Canvas, l: &DeskLayout, clock: &str) {
     c.reset_clip();
     wallpaper(c, l);
     panel(c, l, clock);
-    window_frame(c, l, "Terminal");
+    window_frame(c, l, "ChatBox");
     dock(c, l);
 }
 
@@ -153,7 +160,7 @@ fn dock(c: &mut Canvas, l: &DeskLayout) {
         icon(c, l.dock_item(i), i);
     }
     // A dot under the running app.
-    let t = l.dock_item(TERMINAL);
+    let t = l.dock_item(CHATBOX);
     c.circle(t.x as f32 + t.w as f32 / 2.0, (t.bottom() + (d.bottom() - t.bottom()) / 2) as f32, 2.5, DARK.text, 0.9);
 }
 
@@ -288,25 +295,100 @@ pub fn draw_clock(c: &mut Canvas, l: &DeskLayout, clock: &str) {
     c.reset_clip();
 }
 
+/// Corner radius of the window: small (not the large rounded Mac look).
+const WIN_R: f32 = 8.0;
+
 fn window_frame(c: &mut Canvas, l: &DeskLayout, title: &str) {
     let w = l.window;
     let (x, y, ww, wh) = (w.x as f32, w.y as f32, w.w as f32, w.h as f32);
-    c.shadow(x, y + 8.0, ww, wh, 12.0, 30.0, 0, 0.6);
-    c.round_rect(x, y, ww, wh, 12.0, rgb(30, 36, 56), 1.0);
-    // Title bar: slightly lighter, with the three window dots and the title centred.
-    c.round_rect_vgrad(x, y, ww, l.title_h as f32 + 12.0, 12.0, rgb(44, 52, 78), rgb(34, 41, 62), 1.0);
-    c.fill_rect(Rect::new(w.x, w.y + l.title_h - 1, w.w, 1), rgb(58, 68, 96));
-    let cy = y + l.title_h as f32 / 2.0;
-    let dr = if l.big() { 6.5 } else { 5.5 };
-    for (i, col) in [DARK.bad, DARK.warn, DARK.good].into_iter().enumerate() {
-        c.circle(x + 20.0 + i as f32 * dr * 3.2, cy, dr, col, 1.0);
-    }
+    c.shadow(x, y + 6.0, ww, wh, WIN_R, 26.0, 0, 0.55);
+    c.round_rect(x, y, ww, wh, WIN_R, rgb(26, 30, 46), 1.0);
+    // Title bar: flat, with a thin accent line on top; the app icon and name on the left.
+    c.round_rect(x, y, ww, l.title_h as f32 + WIN_R, WIN_R, rgb(38, 44, 68), 1.0);
+    c.fill_rect(Rect::new(w.x + WIN_R as i32, w.y, w.w - 2 * WIN_R as i32, 2), DARK.accent);
+    c.fill_rect(Rect::new(w.x, w.y + l.title_h - 1, w.w, 1), rgb(52, 60, 86));
+    let is = l.title_h - 12;
+    let pad = if l.big() { 14 } else { 10 };
+    title_icon(c, w.x + pad, w.y + (l.title_h - is) / 2, is);
     let f = face(l.big());
-    let tw = canvas::text_width(f, title, 0);
-    c.text(f, w.x + (w.w - tw) / 2, w.y + (l.title_h - f.height as i32) / 2, title, DARK.text, 0.9);
-    // Body: the console's own background, square at the top, so the text area lines up with it.
+    c.text(f, w.x + pad + is + pad * 3 / 4, w.y + (l.title_h - f.height as i32) / 2, title, DARK.text, 0.95);
+    // Minimise, maximise, close: thin line glyphs; close sits on a red square.
+    let b = l.title_buttons();
+    let g = (l.title_h / 4) as f32;
+    let col = rgb(200, 206, 222);
+    let close = b[2];
+    // Red square, following the window's rounded top-right corner.
+    c.set_clip(close);
+    let (rx, ry) = (close.x as f32 - WIN_R, close.y as f32 - 1.0);
+    c.round_rect(rx, ry, close.w as f32 + WIN_R + 1.0, close.h as f32 + WIN_R + 1.0, WIN_R, rgb(196, 43, 28), 1.0);
+    c.reset_clip();
+    let (mx, my) = (b[0].x as f32 + b[0].w as f32 / 2.0, b[0].y as f32 + b[0].h as f32 / 2.0);
+    c.fill_rect(Rect::new((mx - g / 2.0) as i32, my as i32, g as i32, 1), col);
+    let (qx, qy) = (b[1].x as f32 + b[1].w as f32 / 2.0, b[1].y as f32 + b[1].h as f32 / 2.0);
+    c.round_rect_stroke(qx - g / 2.0, qy - g / 2.0, g, g, 1.5, 1.0, col, 1.0);
+    let (cx, cy) = (close.x + close.w / 2, close.y + close.h / 2);
+    cross(c, cx, cy, l.title_h / 8, rgb(255, 255, 255));
+    // Body: the console's own background, so the text area lines up with it.
     c.fill_rect(l.body, TERM_BG);
-    c.round_rect_stroke(x + 0.5, y + 0.5, ww - 1.0, wh - 1.0, 12.0, 1.0, rgb(70, 82, 116), 0.8);
+    c.round_rect_stroke(x + 0.5, y + 0.5, ww - 1.0, wh - 1.0, WIN_R, 1.0, rgb(64, 74, 104), 0.8);
+}
+
+/// An "x" centred on pixel (`cx`, `cy`) reaching `r` pixels out each way, with soft edges (integer maths:
+/// the distance to each diagonal is |dx -+ dy| / sqrt 2).
+fn cross(c: &mut Canvas, cx: i32, cy: i32, r: i32, col: Color) {
+    for dy in -r..=r {
+        for dx in -r..=r {
+            let d = (dx - dy).abs().min((dx + dy).abs());
+            // d = 0 on a diagonal (full), d = 1 next to it (a third, for anti-aliasing).
+            let a = match d {
+                0 => 256,
+                1 => 80,
+                _ => continue,
+            };
+            c.blend256(cx + dx, cy + dy, col, a);
+        }
+    }
+}
+
+/// The ChatBox icon, made by `tools/genicon.py` from `assets/bedrock.jpg` (empty when there is no image).
+static ICON_DATA: &[u8] = include_bytes!("gui/icondata.bin");
+
+/// The RGBA pixels of the icon that is `size` pixels square, if `data` has one.
+fn icon_pixels(data: &[u8], size: i32) -> Option<&[u8]> {
+    let mut o = 0;
+    while o + 8 <= data.len() {
+        if &data[o..o + 4] != b"BRIC" {
+            return None;
+        }
+        let w = u16::from_le_bytes([data[o + 4], data[o + 5]]) as usize;
+        let h = u16::from_le_bytes([data[o + 6], data[o + 7]]) as usize;
+        let px = data.get(o + 8..o + 8 + w * h * 4)?;
+        if w == h && w as i32 == size {
+            return Some(px);
+        }
+        o += 8 + w * h * 4;
+    }
+    None
+}
+
+/// Draws the ChatBox icon (`s` pixels square) at (`x`, `y`): the bedrock image, or a drawn stone tile.
+fn title_icon(c: &mut Canvas, x: i32, y: i32, s: i32) {
+    if let Some(px) = icon_pixels(ICON_DATA, s) {
+        for j in 0..s {
+            for i in 0..s {
+                let k = ((j * s + i) * 4) as usize;
+                let a = u32::from(px[k + 3]);
+                if a > 0 {
+                    c.blend256(x + i, y + j, rgb(px[k], px[k + 1], px[k + 2]), (a * 257) >> 8);
+                }
+            }
+        }
+        return;
+    }
+    let (fx, fy, fs) = (x as f32, y as f32, s as f32);
+    c.round_rect_vgrad(fx, fy, fs, fs, fs * 0.2, rgb(110, 112, 120), rgb(52, 54, 62), 1.0);
+    c.round_rect(fx + fs * 0.2, fy + fs * 0.25, fs * 0.3, fs * 0.18, 1.0, rgb(150, 152, 160), 1.0);
+    c.round_rect(fx + fs * 0.5, fy + fs * 0.6, fs * 0.3, fs * 0.16, 1.0, rgb(30, 32, 38), 1.0);
 }
 
 /// Formats the panel clock, such as `Mon 23 Nov  14:05 UTC` (the hardware clock is read as UTC; there is no
@@ -335,7 +417,7 @@ pub fn clock_text<'a>(buf: &'a mut [u8; 28], weekday: &str, day: u8, month: &str
     core::str::from_utf8(&buf[..n]).unwrap_or("")
 }
 
-/// The panel message for a click on dock icon `app`: the Terminal is already open; the other apps say which
+/// The panel message for a click on dock icon `app`: ChatBox is already open; the other apps say which
 /// milestone brings them.
 pub fn dock_message(buf: &mut [u8; 48], app: usize) -> &str {
     let Some(&(name, ms)) = APPS.get(app) else { return "" };
@@ -465,14 +547,46 @@ mod tests {
             assert!(l.moved(l.window.x, 10_000).window.bottom() <= l.dock.y, "dragging cannot cover the dock");
             assert!(l.message.intersect(&l.clock).is_empty(), "message area clear of the clock");
         }
-        assert_eq!(APPS[TERMINAL], ("Terminal", None));
+        assert_eq!(APPS[CHATBOX], ("ChatBox", None));
+    }
+
+    #[test]
+    fn title_buttons_sit_right_in_the_title_bar() {
+        for &(w, h) in &[(1024, 768), (1920, 1080)] {
+            let l = DeskLayout::new(w, h);
+            let [min, max, close] = l.title_buttons();
+            assert_eq!(close.right(), l.window.right() - 1, "close at the right edge");
+            assert_eq!(max.right(), close.x);
+            assert_eq!(min.right(), max.x);
+            let bar = l.title_bar();
+            for b in [min, max, close] {
+                assert_eq!(bar.intersect(&b), b, "inside the title bar at {w}x{h}");
+            }
+        }
+    }
+
+    #[test]
+    fn icon_data_has_both_title_bar_sizes() {
+        // Built by tools/genicon.py; empty means "no image" (placeholder drawn).
+        if !ICON_DATA.is_empty() {
+            for s in [20, 28] {
+                assert_eq!(icon_pixels(ICON_DATA, s).map(<[u8]>::len), Some((s * s * 4) as usize), "size {s}");
+            }
+        }
+        let mut one = b"BRIC".to_vec();
+        one.extend_from_slice(&[2, 0, 2, 0]);
+        one.extend_from_slice(&[9; 16]);
+        assert_eq!(icon_pixels(&one, 2), Some(&[9u8; 16][..]));
+        assert_eq!(icon_pixels(&one, 3), None);
+        assert_eq!(icon_pixels(&one[..10], 2), None, "truncated");
+        assert_eq!(icon_pixels(b"JUNKxxxx", 2), None);
     }
 
     #[test]
     fn dock_messages() {
         let mut b = [0u8; 48];
         assert_eq!(dock_message(&mut b, 0), "Notes arrives in milestone 6");
-        assert_eq!(dock_message(&mut b, TERMINAL), "Terminal is open");
+        assert_eq!(dock_message(&mut b, CHATBOX), "ChatBox is open");
         assert_eq!(dock_message(&mut b, 5), "Settings arrives in milestone 10");
         assert_eq!(dock_message(&mut b, 99), "");
         // Every message fits the panel's message area at the smallest supported screen.
