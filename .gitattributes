@@ -6,3 +6,4 @@
 *.png binary
 tests/fixtures/** binary
 repo-src/** binary
+*.bat text eol=crlf
