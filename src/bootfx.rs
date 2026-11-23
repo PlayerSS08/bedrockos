@@ -298,6 +298,9 @@ struct Desk {
     /// When notes / tasks last changed and are not saved yet (TSC).
     notes_dirty: Option<u64>,
     tasks_dirty: Option<u64>,
+    /// Following the VirtualBox window's size: whether the guest device answered, and the last poll (TSC).
+    follow_window: bool,
+    size_at: u64,
 }
 
 static DESK: Global<Option<Desk>> = Global::new(None);
@@ -368,6 +371,8 @@ fn enter_desktop() -> bool {
             drag_drawn: 0,
             notes_dirty: None,
             tasks_dirty: None,
+            follow_window: false,
+            size_at: 0,
         });
     }
     let full = Rect::new(0, 0, w as i32, h as i32);
@@ -398,6 +403,66 @@ fn enter_desktop() -> bool {
     blit(&fb, &back[..w * h], w, full);
     log::attach_console(con);
     crate::info!("desktop", "desktop shown; ChatBox window, text area {}x{} at ({}, {})", t.w, t.h, t.x, t.y);
+    let follow = crate::vmdisplay::init();
+    if let Some(d) = desk() {
+        d.follow_window = follow;
+    }
+    true
+}
+
+/// Draws the wallpaper picture (or the gradient) and the empty panel into BACKDROP for the current layout.
+fn draw_backdrop_buffer(l: &DeskLayout, w: usize, h: usize) {
+    // SAFETY: BACKDROP is only written here (with interrupts off, or on the boot path) and read by `compose`.
+    let bd = unsafe { BACKDROP.get() };
+    let picture = picture_into(wallimg::DESK, &mut bd[..w * h], w, h, 240);
+    let Some(mut c) = Canvas::new(&mut bd[..w * h], w, h, w) else { return };
+    if picture {
+        desktop::draw_backdrop_over_picture(&mut c, l);
+    } else {
+        desktop::draw_backdrop(&mut c, l);
+    }
+}
+
+/// Switches the screen to `w` x `h` and lays the desktop out again: wallpaper, panel, dock, the open windows
+/// at their default places for that size, and ChatBox's text grid. Apps keep their contents.
+fn resize_desktop(d: &mut Desk, w: usize, h: usize) -> bool {
+    let s = state();
+    let Some(mut fb) = s.fb else { return false };
+    let Some(stride) = crate::vmdisplay::set_mode(w, h) else {
+        crate::warn!("desktop", "the graphics device refused {}x{}", w, h);
+        return false;
+    };
+    fb.width = w;
+    fb.height = h;
+    fb.stride = stride;
+    fb.size = stride * h * 4;
+    s.fb = Some(fb);
+    s.dp = None;
+    s.dp_shown = None;
+    let l = DeskLayout::new(w, h);
+    let mut wm = Wm::new(l.app_rects(), l.area());
+    for &a in d.wm.order() {
+        wm.show(a);
+    }
+    d.wm = wm;
+    d.l = l;
+    d.maxed = [None; crate::wm::N];
+    d.tip = None;
+    d.palette = None;
+    d.drag = None;
+    let t = d.l.term_in(d.wm.rect(CHATBOX));
+    let _ = log::with_console(|c| {
+        // SAFETY: the console draws into TERMBUF, which holds MAX_W * MAX_H pixels, more than any text area.
+        unsafe { c.resize(t.w as usize, t.h as usize) }
+    });
+    let _ = crate::fb::take_dirty();
+    draw_backdrop_buffer(&d.l, w, h);
+    let full = Rect::new(0, 0, w as i32, h as i32);
+    compose(d, &fb, full);
+    // SAFETY: BACK is only used with interrupts off after boot.
+    let back = unsafe { BACK.get() };
+    blit(&fb, &back[..w * h], w, full);
+    crate::info!("desktop", "screen resized to {}x{} to follow the VirtualBox window", w, h);
     true
 }
 
@@ -509,6 +574,15 @@ fn win_area(d: &Desk, app: usize) -> Rect {
 pub fn desk_tick() {
     arch::without_interrupts(|| {
         let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
+        // Twice a second: does the VirtualBox window want another screen size?
+        if d.follow_window && d.drag.is_none() && us_since(d.size_at) >= 500_000 {
+            d.size_at = arch::rdtsc();
+            if let Some((w, h)) = crate::vmdisplay::wanted().and_then(|(w, h)| crate::vmdisplay::fit(w, h, (MAX_W, MAX_H))) {
+                if (w, h) != (fb.width, fb.height) && resize_desktop(d, w, h) {
+                    return;
+                }
+            }
+        }
         console_to_screen(d, &fb);
         if d.msg_at.is_some_and(|t| us_since(t) >= MESSAGE_US) {
             d.msg.clear();

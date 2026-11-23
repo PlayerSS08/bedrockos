@@ -37,6 +37,7 @@ pub mod apps2;
 pub mod battery;
 pub mod calc;
 pub mod tz;
+pub mod vmdisplay;
 pub mod wm;
 pub mod cmdhelp;
 pub mod cpuid;
