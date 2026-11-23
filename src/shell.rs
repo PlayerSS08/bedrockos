@@ -1,4 +1,4 @@
-﻿//! Interactive kernel shell and the status-bar task. Both run as scheduler tasks.
+//! Interactive kernel shell and the status-bar task. Both run as scheduler tasks.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -2298,8 +2298,68 @@ fn store_redirect(path: &str, data: &[u8], append: bool) {
 
 /// Runs one parsed line: programs from files run as processes (several at once, joined by pipes); a shell
 /// builtin may only be the first stage, and its output is collected and passed on.
+/// A text filter usable after `|` without a /bin program: `sort [-r] [-n]`, `uniq`, `wc`, `head [n]`,
+/// `tail [n]`, `grep <word>`, `rev`, `upper`, `lower`. `None` when `toks` is not one.
+fn text_filter(toks: &[String], input: &str) -> Option<String> {
+    let arg = toks.get(1).map(String::as_str).unwrap_or("");
+    let mut lines: Vec<&str> = input.lines().collect();
+    let join = |v: Vec<String>| v.iter().map(|l| alloc::format!("{l}\n")).collect::<String>();
+    Some(match toks.first()?.as_str() {
+        "sort" => {
+            if toks.iter().any(|t| t == "-n") {
+                lines.sort_by_key(|l| l.trim().parse::<i64>().unwrap_or(i64::MAX));
+            } else {
+                lines.sort_unstable();
+            }
+            if toks.iter().any(|t| t == "-r") {
+                lines.reverse();
+            }
+            join(lines.into_iter().map(String::from).collect())
+        }
+        "uniq" => {
+            lines.dedup();
+            join(lines.into_iter().map(String::from).collect())
+        }
+        "wc" => alloc::format!("{} lines, {} words, {} bytes\n", lines.len(), input.split_whitespace().count(), input.len()),
+        "head" => join(lines.into_iter().take(arg.parse().unwrap_or(10)).map(String::from).collect()),
+        "tail" => {
+            let k = arg.parse().unwrap_or(10);
+            join(lines[lines.len().saturating_sub(k)..].iter().map(|s| String::from(*s)).collect())
+        }
+        "grep" => join(lines.into_iter().filter(|l| l.contains(arg)).map(String::from).collect()),
+        "rev" => join(lines.into_iter().map(|l| l.chars().rev().collect()).collect()),
+        "upper" => input.to_uppercase(),
+        "lower" => input.to_lowercase(),
+        _ => return None,
+    })
+}
+
+const TEXT_FILTERS: &[&str] = &["sort", "uniq", "wc", "head", "tail", "grep", "rev", "upper", "lower"];
+
 fn exec_job(l: &shparse::Line<'_>) {
     let n = l.stages.len();
+    // Builtin | filter | filter ...: run the first stage, then the text filters, all inside the shell.
+    let all_filters = l.stages.iter().skip(1).all(|st| tokenize(st).first().is_some_and(|c| TEXT_FILTERS.contains(&c.as_str()) && find_program(c).is_none()));
+    if n > 1 && all_filters && tokenize(l.stages[0]).first().is_some_and(|c| find_program(c).is_none()) {
+        // SAFETY: shell task only; the buffer is taken back before anything else prints.
+        unsafe { *CAPTURE.get() = Some(Vec::new()) };
+        run_plain(l.stages[0], &History::new());
+        // SAFETY: as above.
+        let data = unsafe { CAPTURE.get().take() }.unwrap_or_default();
+        let mut text = String::from_utf8_lossy(&data).into_owned();
+        for st in &l.stages[1..] {
+            text = text_filter(&tokenize(st), &text).unwrap_or_default();
+        }
+        match l.redirect {
+            Some((name, append)) => {
+                if let Some(p) = redirect_target(name, append) {
+                    store_redirect(&p, text.as_bytes(), append);
+                }
+            }
+            None => out!("{}", text),
+        }
+        return;
+    }
     let here = String::from(if cwd().is_empty() { "/" } else { cwd().as_str() });
     // Check everything before starting anything.
     let mut progs: Vec<Option<(String, Vec<u8>)>> = Vec::new();
@@ -3473,6 +3533,59 @@ fn cmd_nettest() {
     out!("{} of 5 passed\n", pass);
 }
 
+/// `note list`, `note export <title> <file.txt>`, `note import <file.txt> [title]`: the Notes app's notes
+/// (kept as /notes/<title>.txt) to and from ordinary text files.
+fn cmd_note(rest: &str) {
+    let mut it = rest.split_whitespace();
+    let dir = crate::apps::NOTES_DIR;
+    match (it.next(), it.next(), it.next()) {
+        (Some("list") | None, _, _) => {
+            crate::bootfx::notes_save_now();
+            let mut any = false;
+            for (name, size) in fs().list(dir) {
+                if let (Some(t), Some(sz)) = (name.strip_suffix(".txt"), size) {
+                    out!("  {:<24} {} bytes\n", t, sz);
+                    any = true;
+                }
+            }
+            if !any {
+                out!("no notes yet (open Notes from the dock, or `note import <file>`)\n");
+            }
+        }
+        (Some("export"), Some(title), Some(file)) => {
+            crate::bootfx::notes_save_now();
+            match fs().read(&alloc::format!("{dir}/{title}.txt")) {
+                Some(data) => {
+                    let data = data.to_vec();
+                    match save_bytes(file, &data) {
+                        Ok(w) => out!("exported note `{}` to {}\n", title, w),
+                        Err(e) => out!("note: {}\n", e),
+                    }
+                }
+                None => out!("note: no note called `{}` (`note list` shows them)\n", title),
+            }
+        }
+        (Some("import"), Some(file), title) => {
+            let Some(data) = fs().read(file).map(<[u8]>::to_vec) else {
+                out!("note: cannot read {}\n", file);
+                return;
+            };
+            let base = file.rsplit('/').next().unwrap_or(file);
+            let title = title.unwrap_or_else(|| base.strip_suffix(".txt").unwrap_or(base));
+            crate::bootfx::notes_save_now();
+            let _ = fs().mkdir(dir);
+            match fs().write(&alloc::format!("{dir}/{title}.txt"), &data) {
+                Ok(()) => {
+                    crate::bootfx::notes_reload();
+                    out!("imported {} as note `{}`\n", file, title);
+                }
+                Err(e) => fs_error(e, file),
+            }
+        }
+        _ => out!("usage: note list | note export <title> <file.txt> | note import <file.txt> [title]\n"),
+    }
+}
+
 /// `task add <text>`, `task list`, `task done <n>`, `task rm <n>`: the same list as the Tasks app.
 fn cmd_task(rest: &str) {
     use crate::apps::{parse_tasks, tasks_text, Task, TASKS_FILE};
@@ -3660,6 +3773,7 @@ fn run_plain(line: &str, hist: &History) {
         }
         "task" => cmd_task(rest),
         "nettest" => cmd_nettest(),
+        "note" => cmd_note(rest),
         "open" => match crate::bootfx::open_named(rest.trim()) {
             _ if rest.trim().is_empty() => out!("usage: open <notes|tasks|settings|help>\n"),
             Ok(()) => {}

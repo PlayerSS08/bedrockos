@@ -148,10 +148,18 @@ global_asm!(
         push r14
         push r15
         mov rcx, rsp            // Microsoft x64 ABI: first argument = the frame
+        // The user program expects its SSE registers unchanged across `syscall`, but kernel code (the
+        // desktop's drawing, for one) uses them: keep a copy (rbx is callee-saved and already stored).
+        mov rbx, rsp
+        and rsp, -16
+        sub rsp, 512
+        fxsave [rsp]
         sub rsp, 32
         cld
         call aeon_syscall_dispatch
         add rsp, 32
+        fxrstor [rsp]
+        mov rsp, rbx
         pop r15
         pop r14
         pop r13

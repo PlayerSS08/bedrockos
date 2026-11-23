@@ -619,6 +619,29 @@ pub fn persist_done(only_in_memory: bool) {
 }
 
 /// The `task` command changed the task file: the Tasks window reads it again.
+/// Saves the Notes window's edits now (before `note import` adds a file under /notes).
+pub fn notes_save_now() {
+    arch::without_interrupts(|| {
+        if let Some(n) = desk().and_then(|d| d.notes.as_mut()) {
+            save_notes(n);
+        }
+    });
+}
+
+/// Reloads the Notes window from /notes (after `note import`).
+pub fn notes_reload() {
+    arch::without_interrupts(|| {
+        let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
+        if d.notes.is_some() {
+            d.notes = Some(load_notes());
+            if d.wm.is_open(NOTES) {
+                let r = desktop::app_body(d.wm.rect(NOTES), d.l.title_h);
+                redraw(d, &fb, r);
+            }
+        }
+    });
+}
+
 pub fn tasks_reload() {
     arch::without_interrupts(|| {
         let (Some(d), Some(fb)) = (desk(), state().fb) else { return };

@@ -1,4 +1,4 @@
-﻿//! The desktop apps that are drawn by the desktop itself (not by the text console): Notes, Tasks and Help.
+//! The desktop apps that are drawn by the desktop itself (not by the text console): Notes, Tasks and Help.
 //! Pure: each app keeps its state, takes keys and clicks, and draws into a [`Canvas`] rectangle. Loading and
 //! saving are done by the kernel through [`Notes::files`] / [`Tasks::to_text`], so this is host-tested.
 
@@ -80,7 +80,24 @@ pub struct Notes {
     pub unsaved: bool,
     /// Shown in the footer: "Saved", "Saved in memory only", ...
     pub save_note: &'static str,
+    /// Earlier states of the open note (text, cursor) for Ctrl+Z, newest last; Ctrl+Y redoes.
+    undo: Vec<(Vec<u8>, (usize, usize))>,
+    redo: Vec<(Vec<u8>, (usize, usize))>,
+    /// The last edit was typing a letter (typing a word is one undo step).
+    typing: bool,
+    /// Ctrl+C / Ctrl+X copy or cut the current line; Ctrl+V pastes it.
+    clip: Vec<u8>,
+    /// The Ctrl+F (find) or Ctrl+R (rename) prompt, with what was typed so far.
+    prompt: Option<(Prompt, String)>,
 }
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub enum Prompt {
+    Find,
+    Rename,
+}
+
+const UNDO_MAX: usize = 100;
 
 impl Notes {
     /// Opens the notes found as (title, text) pairs; with none, starts one empty "Note 1".
@@ -91,7 +108,7 @@ impl Notes {
         found.sort_by(|a, b| a.0.cmp(&b.0));
         let (names, texts): (Vec<String>, Vec<Vec<u8>>) = found.into_iter().unzip();
         let doc = Doc::new(&texts[0], NOTE_MAX);
-        Notes { names, texts, open: 0, doc, unsaved: false, save_note: "Saved" }
+        Notes { names, texts, open: 0, doc, unsaved: false, save_note: "Saved", undo: Vec::new(), redo: Vec::new(), typing: false, clip: Vec::new(), prompt: None }
     }
 
     pub fn count(&self) -> usize {
@@ -120,6 +137,124 @@ impl Notes {
         self.texts[self.open] = self.doc.text();
         self.open = to;
         self.doc = Doc::new(&self.texts[to], NOTE_MAX);
+        self.undo.clear();
+        self.redo.clear();
+    }
+
+    /// Puts the open note back to `text` with the cursor at `cur` (line, column).
+    fn restore(&mut self, text: &[u8], cur: (usize, usize)) {
+        self.doc = Doc::new(text, NOTE_MAX);
+        self.doc.top_of_file();
+        for _ in 0..cur.0 {
+            self.doc.down();
+        }
+        self.doc.home();
+        for _ in 0..cur.1 {
+            self.doc.right();
+        }
+    }
+
+    fn snapshot(&mut self) {
+        if self.undo.len() == UNDO_MAX {
+            self.undo.remove(0);
+        }
+        self.undo.push((self.doc.text(), self.doc.cursor()));
+        self.redo.clear();
+    }
+
+    pub fn undo(&mut self) -> bool {
+        let Some((t, c)) = self.undo.pop() else { return false };
+        self.redo.push((self.doc.text(), self.doc.cursor()));
+        self.restore(&t, c);
+        self.typing = false;
+        true
+    }
+
+    pub fn redo(&mut self) -> bool {
+        let Some((t, c)) = self.redo.pop() else { return false };
+        self.undo.push((self.doc.text(), self.doc.cursor()));
+        self.restore(&t, c);
+        self.typing = false;
+        true
+    }
+
+    /// Moves the cursor to the next place `q` appears after it (wrapping to the top). False when nowhere.
+    pub fn find_next(&mut self, q: &str) -> bool {
+        if q.is_empty() {
+            return false;
+        }
+        let q = q.as_bytes();
+        let (cl, cc) = self.doc.cursor();
+        let n = self.doc.line_count().max(1);
+        for step in 0..=n {
+            let li = (cl + step) % n;
+            let line = self.doc.line(li);
+            let from = if step == 0 { cc + 1 } else { 0 };
+            if from > line.len() {
+                continue;
+            }
+            if let Some(pos) = line[from..].windows(q.len()).position(|w| w.eq_ignore_ascii_case(q)) {
+                let t = self.doc.text();
+                self.restore(&t, (li, from + pos));
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Renames the open note. Refuses empty names, names with `/`, and names already used.
+    pub fn rename(&mut self, to: &str) -> Result<(), &'static str> {
+        let to = to.trim();
+        if to.is_empty() || to.contains('/') || to.len() > 40 {
+            return Err("a name needs 1 to 40 characters and no /");
+        }
+        if self.names.iter().enumerate().any(|(i, n)| i != self.open && n == to) {
+            return Err("another note has that name");
+        }
+        self.names[self.open] = String::from(to);
+        self.unsaved = true;
+        Ok(())
+    }
+
+    pub fn prompt(&self) -> Option<&(Prompt, String)> {
+        self.prompt.as_ref()
+    }
+
+    fn paste(&mut self, data: &[u8]) -> bool {
+        let mut ok = false;
+        for &b in data {
+            ok |= if b == b'\n' { self.doc.enter().is_ok() } else { self.doc.insert(b).is_ok() };
+        }
+        ok
+    }
+
+    /// Keys while the find or rename prompt is open.
+    fn prompt_key(&mut self, k: Key) -> Effect {
+        let Some((kind, mut q)) = self.prompt.take() else { return Effect::None };
+        match k {
+            Key::Esc => return Effect::Redraw,
+            Key::Char(b) if (32..127).contains(&b) && q.len() < 40 => q.push(b as char),
+            Key::Backspace => {
+                q.pop();
+            }
+            Key::Enter if kind == Prompt::Find => {
+                if !self.find_next(&q) {
+                    self.save_note = "Not found";
+                }
+            }
+            Key::Enter => {
+                return match self.rename(&q) {
+                    Ok(()) => Effect::Changed,
+                    Err(e) => {
+                        self.save_note = e;
+                        Effect::Redraw
+                    }
+                };
+            }
+            _ => {}
+        }
+        self.prompt = Some((kind, q));
+        Effect::Redraw
     }
 
     /// Adds an empty note named "Note N" (the first free N) and opens it.
@@ -153,7 +288,47 @@ impl Notes {
     }
 
     pub fn key(&mut self, k: Key) -> Effect {
+        if self.prompt.is_some() {
+            return self.prompt_key(k);
+        }
+        // Remember the state before anything that edits, so Ctrl+Z can bring it back. A run of typed
+        // letters is one step.
+        let edits = matches!(k, Key::Char(_) | Key::Enter | Key::Tab | Key::Backspace | Key::Delete | Key::Ctrl(b'x' | b'v'));
+        let letter = matches!(k, Key::Char(b) if b != b' ');
+        if edits && !(letter && self.typing) {
+            self.snapshot();
+        }
+        if edits {
+            self.typing = letter;
+        }
         let edited = match k {
+            Key::Ctrl(b'z') => self.undo(),
+            Key::Ctrl(b'y') => self.redo(),
+            Key::Ctrl(b'c') => {
+                self.clip = self.doc.line(self.doc.cursor().0).to_vec();
+                self.clip.push(b'\n');
+                self.save_note = "Line copied";
+                return Effect::Redraw;
+            }
+            Key::Ctrl(b'x') => {
+                self.clip = self.doc.line(self.doc.cursor().0).to_vec();
+                self.clip.push(b'\n');
+                self.doc.cut_line();
+                true
+            }
+            Key::Ctrl(b'v') => {
+                let c = self.clip.clone();
+                self.doc.home();
+                self.paste(&c)
+            }
+            Key::Ctrl(b'f') => {
+                self.prompt = Some((Prompt::Find, String::new()));
+                return Effect::Redraw;
+            }
+            Key::Ctrl(b'r') => {
+                self.prompt = Some((Prompt::Rename, self.names[self.open].clone()));
+                return Effect::Redraw;
+            }
             Key::Ctrl(b'n') => {
                 self.new_note();
                 return Effect::Changed;
@@ -266,7 +441,11 @@ impl Notes {
         // Editor area: title, text, footer.
         let ed = Rect::new(side.right() + 16, body.y + 12, body.right() - side.right() - 28, body.h - 24);
         let foot_h = f.sans.height as i32 + 10;
-        text(c, f.sans, ed.x, ed.y, &self.names[self.open], DARK.text);
+        match &self.prompt {
+            Some((Prompt::Rename, q)) => text(c, f.sans, ed.x, ed.y, &format!("Rename to: {q}_   (Enter saves, Esc cancels)"), DARK.accent),
+            Some((Prompt::Find, q)) => text(c, f.sans, ed.x, ed.y, &format!("Find: {q}_   (Enter finds next, Esc closes)"), DARK.accent),
+            None => text(c, f.sans, ed.x, ed.y, &self.names[self.open], DARK.text),
+        }
         let area = Rect::new(ed.x, ed.y + f.sans.height as i32 + 12, ed.w, ed.h - f.sans.height as i32 - 12 - foot_h);
         let (cw, ch) = f.cell;
         let rows = (area.h / ch).max(1) as usize;
@@ -286,10 +465,10 @@ impl Notes {
         // Footer: save state and the keys.
         let fy = ed.bottom() - foot_h + 6;
         c.fill_rect(Rect::new(ed.x, fy - 6, ed.w, 1), DARK.border);
-        let (state, col) = if self.unsaved { ("Saving...", DARK.warn) } else { (self.save_note, if self.save_note == "Saved" { DARK.good } else { DARK.warn }) };
+        let (state, col) = if self.unsaved { ("Saving...", DARK.warn) } else { (self.save_note, if matches!(self.save_note, "Saved" | "Line copied") { DARK.good } else { DARK.warn }) };
         c.circle((ed.x + 5) as f32, (fy + f.sans.height as i32 / 2) as f32, 4.0, col, 1.0);
         text(c, f.sans, ed.x + 16, fy, state, DARK.text_dim);
-        let hint = "Ctrl+N new   Ctrl+Up/Down switch   Ctrl+D delete";
+        let hint = "Ctrl+N new  Ctrl+R rename  Ctrl+F find  Ctrl+Z/Y undo/redo  Ctrl+C/X/V line";
         let hw = canvas::text_width(f.sans, hint, 0);
         if hw < ed.w - 200 {
             text(c, f.sans, ed.right() - hw, fy, hint, DARK.text_dim);
@@ -666,6 +845,46 @@ impl Help {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn typed(n: &mut Notes, s: &str) {
+        for b in s.bytes() {
+            n.key(Key::Char(b));
+        }
+    }
+
+    #[test]
+    fn notes_undo_redo_find_rename_and_paste() {
+        let mut n = Notes::new(alloc::vec![(String::from("A"), Vec::new()), (String::from("B"), Vec::new())]);
+        typed(&mut n, "hello world");
+        assert_eq!(n.doc.text(), b"hello world\n");
+        n.key(Key::Ctrl(b'z'));
+        assert_eq!(n.doc.text(), b"hello \n", "one undo removes the last word");
+        n.key(Key::Ctrl(b'y'));
+        assert_eq!(n.doc.text(), b"hello world\n");
+        // Copy the line, paste it as a new line above.
+        n.key(Key::Ctrl(b'c'));
+        n.key(Key::Ctrl(b'v'));
+        assert_eq!(n.doc.text(), b"hello world\nhello world\n");
+        n.key(Key::Ctrl(b'z'));
+        assert_eq!(n.doc.text(), b"hello world\n");
+        // Find.
+        n.restore(b"one\ntwo three\n", (0, 0));
+        n.key(Key::Ctrl(b'f'));
+        typed(&mut n, "THREE");
+        n.key(Key::Enter);
+        assert_eq!(n.doc.cursor(), (1, 4));
+        n.key(Key::Esc);
+        assert!(n.prompt().is_none());
+        // Rename: refused when taken, accepted otherwise; the file name follows.
+        assert_eq!(n.rename("B"), Err("another note has that name"));
+        n.key(Key::Ctrl(b'r'));
+        for _ in 0..5 {
+            n.key(Key::Backspace);
+        }
+        typed(&mut n, "Shopping");
+        n.key(Key::Enter);
+        assert!(n.files().iter().any(|(f, _)| f == "Shopping.txt"));
+    }
 
     #[test]
     fn tasks_round_trip_and_keys() {

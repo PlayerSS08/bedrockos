@@ -1,4 +1,4 @@
-﻿//! The shell's command table: one place that says what each command is called, how it is used and
+//! The shell's command table: one place that says what each command is called, how it is used and
 //! what it does. `help`, `help <command>` and `help all` all read from it. Pure, host-tested.
 
 pub struct Cmd {
@@ -51,6 +51,7 @@ pub const COMMANDS: &[Cmd] = &[
     c("tools", "fortune", "fortune", "a saying"),
     c("tools", "base64", "base64 [-d] <text>", "encode or decode base64"),
     c("tools", "bench", "bench", "quick CPU speed test"),
+    c("tasks", "note", "note <list|export..>", "notes to and from .txt files"),
     c("tasks", "todo-today", "todo-today", "tasks not done yet"),
     c("tasks", "task", "task [add|done|rm]", "your to-do list (the same as the Tasks app)"),
     c("network", "ip", "ip [a|r|l|n]", "configure and view IP, links, routing"),
