@@ -699,10 +699,6 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, opts: Bo
     }
     // SAFETY: con_in is a live protocol (checked non-null); resetting also drops stale keystrokes.
     unsafe { ((*st.con_in).reset)(st.con_in, false) };
-    if bootfx::active() {
-        bootfx::set_key_poll(None);
-        login_screen(st, bs);
-    }
     if opts.menu_timeout == 0 {
         if FW_ST.load(Ordering::Relaxed) != 0 {
             bootfx::set_key_poll(Some(fw_verbose_key));
@@ -775,9 +771,32 @@ fn boot_menu(st: &SystemTable, bs: &BootServices, rt: &RuntimeServices, opts: Bo
     opts
 }
 
-/// The sign-in screen before the boot menu (see `bedrockos::login`): waits until the right user name and
-/// password are typed. Keys come through the firmware, so USB keyboards work.
-fn login_screen(st: &SystemTable, bs: &BootServices) {
+/// The sign-in screen after the boot screen, before the desktop (see `bedrockos::login`): waits until the
+/// right user name and password are typed. Runs after ExitBootServices, so keys come from the PS/2 keyboard
+/// (also what VirtualBox types into) and the USB keyboard driver.
+fn login_screen() {
+    use bedrockos::keymap::{Key as K, Keyboard};
+    use bedrockos::login::Key;
+    // The boot screen's Esc/V check would eat the typed keys.
+    bootfx::set_key_poll(None);
+    let mut kbd = Keyboard::new();
+    let mut next = move || -> Option<Key> {
+        let k = shell::ps2_byte().and_then(|b| kbd.feed(b)).or_else(bedrockos::xhci::poll_key)?;
+        Some(match k {
+            K::Up | K::HistoryPrev => Key::Up,
+            K::Down | K::HistoryNext => Key::Down,
+            K::Esc => Key::Esc,
+            K::Enter => Key::Enter,
+            K::Tab => Key::Tab,
+            K::Backspace => Key::Backspace,
+            K::Char(c) if (0x20..0x7F).contains(&c) => Key::Char(c),
+            _ => return None,
+        })
+    };
+    run_login(&mut next, || wait_us(5_000));
+}
+
+fn run_login(next_key: &mut dyn FnMut() -> Option<bedrockos::login::Key>, wait: impl Fn()) {
     use bedrockos::login::{Key, Login, Outcome};
     info!("login", "login open: waiting for the user name and password");
     let mut login = Login::new();
@@ -803,28 +822,15 @@ fn login_screen(st: &SystemTable, bs: &BootServices) {
     };
     draw(&login, true);
     loop {
-        let _ = (bs.stall)(5_000);
+        wait();
         let now = bedrockos::arch::rdtsc();
         let ms = (u128::from(now.wrapping_sub(last)) * 1000 / hz).min(u128::from(u32::MAX)) as u32;
         last = now;
         let mut outcome = login.tick(ms);
-        if let Some((scan, ch)) = read_key(st) {
-            // UEFI scan codes: 0x01 up, 0x02 down, 0x17 Esc.
-            let key = match (scan, ch) {
-                (0x01, _) => Some(Key::Up),
-                (0x02, _) => Some(Key::Down),
-                (0x17, _) => Some(Key::Esc),
-                (_, 0x0D) => Some(Key::Enter),
-                (_, 0x09) => Some(Key::Tab),
-                (_, 0x08) => Some(Key::Backspace),
-                (_, c) if (0x20..0x7F).contains(&c) => Some(Key::Char(c as u8)),
-                _ => None,
-            };
-            if let Some(k) = key {
-                outcome = login.key(k);
-                if k == Key::Enter && login.error && outcome == Outcome::Redraw {
-                    warn!("login", "wrong user name or password");
-                }
+        if let Some(k) = next_key() {
+            outcome = login.key(k);
+            if k == Key::Enter && login.error && outcome == Outcome::Redraw {
+                warn!("login", "wrong user name or password");
             }
         }
         match outcome {
@@ -1483,6 +1489,9 @@ extern "C" fn kernel_main() -> ! {
 
     // Finish the boot screen: bar to 100 %, a short hold, a fade, then the shell (the desktop from milestone 3).
     if bootfx::active() {
+        // Boot screen -> sign-in -> desktop.
+        bootfx::stage("Ready: sign in", 1000);
+        login_screen();
         bootfx::finish();
     } else if log::with_console(|c| c.splash_active()).unwrap_or(false) {
         bar_to(1000);

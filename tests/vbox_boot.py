@@ -178,8 +178,14 @@ def boot_at(res, r, keep):
     if os.path.exists(SERIAL):
         os.remove(SERIAL)
     vb("startvm", VM, "--type", "headless")
-    # The sign-in screen comes first: a wrong password must be refused, then the right one lets the boot go on.
-    if wait_for(["login open"], 60)[0]:
+    # The boot menu waits for a choice: press Enter on "Boot BedrockOS" once it is open.
+    if wait_for(["menu open"], 60)[0]:
+        time.sleep(1.0)
+        vb("controlvm", VM, "keyboardputscancode", "1c", "9c", check=False)
+    ok, t = wait_for(["BedrockOS", "boot complete"], 90)
+    r.check(f"{res}: serial shows 'boot complete'", ok, f"{t:.1f} s")
+    # Then the sign-in screen, before the desktop: a wrong password is refused, the right one goes on.
+    if wait_for(["login open"], 30)[0]:
         time.sleep(1.0)
         type_text("BedrockOS\twrongpass1\r")
         bad, _ = wait_for(["wrong user name or password"], 10)
@@ -187,12 +193,6 @@ def boot_at(res, r, keep):
         type_text("MinecraftSS_08\r")
         good, _ = wait_for(["signed in as BedrockOS"], 10)
         r.check(f"{res}: login accepts the right password", good)
-    # The boot menu waits for a choice: press Enter on "Boot BedrockOS" once it is open.
-    if wait_for(["menu open"], 60)[0]:
-        time.sleep(1.0)
-        vb("controlvm", VM, "keyboardputscancode", "1c", "9c", check=False)
-    ok, t = wait_for(["BedrockOS", "boot complete"], 90)
-    r.check(f"{res}: serial shows 'boot complete'", ok, f"{t:.1f} s")
     ok2, _ = wait_for(["BedrockOS shell"], 20)
     r.check(f"{res}: shell started", ok2)
     log = read_serial()

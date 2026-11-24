@@ -18,6 +18,7 @@ use crate::apps2::{Calculator, Clock, Files, FilesReq, Snake};
 use crate::browser::Browser;
 use crate::desktop::{self, DeskLayout, APPS, BROWSER, CALC, CHATBOX, CLOCK, FILES, HELP, NETWORK, NOTES, SETTINGS, SNAKE, TASKS};
 use crate::keymap::Key;
+use crate::wififly::{self, WifiFly, WifiReq};
 use crate::wm::Wm;
 use alloc::format;
 use alloc::string::String;
@@ -298,6 +299,8 @@ struct Desk {
     watch_at: u64,
     /// The hover tip shown under the top bar: which spot (0 network, 1 battery, 2 clock) and where it is.
     tip: Option<(usize, Rect)>,
+    /// The Wi-Fi drop-down under the network icon, while open.
+    wifi: Option<WifiFly>,
     /// The achievement toast on screen and when it appeared.
     toast: Option<(&'static str, u64)>,
     /// Wallpaper brightness (day and night), see [`daylight`].
@@ -385,6 +388,7 @@ fn enter_desktop() -> bool {
             maxed: [None; crate::wm::N],
             palette: None,
             tip: None,
+            wifi: None,
             toast: None,
             bright: daylight(),
             settings_at: 0,
@@ -492,6 +496,7 @@ fn resize_desktop(d: &mut Desk, w: usize, h: usize) -> bool {
     d.l = l;
     d.maxed = [None; crate::wm::N];
     d.tip = None;
+    d.wifi = None;
     d.palette = None;
     d.drag = None;
     let t = d.l.term_in(d.wm.rect(CHATBOX));
@@ -584,6 +589,9 @@ fn compose(d: &mut Desk, fb: &FbInfo, r: Rect) {
     if let Some((kind, _)) = d.tip {
         let (lines, tr) = tip_for(d, kind);
         desktop::draw_tip(&mut c, &d.l, tr, &lines);
+    }
+    if let Some(wf) = d.wifi.as_ref() {
+        wf.draw(&mut c, wifi_rect(d), &f);
     }
     if let Some((title, _)) = d.toast {
         desktop::draw_toast(&mut c, &d.l, title);
@@ -1018,7 +1026,7 @@ fn tip_for(d: &Desk, kind: usize) -> (Vec<String>, Rect) {
             } else {
                 v.push(String::from("Not connected"));
             }
-            v.push(String::from("`nettest` in ChatBox checks the connection"));
+            v.push(String::from("Click to see Wi-Fi networks and connect"));
         }
         1 => match crate::battery::read() {
             Some(b) => {
@@ -1062,7 +1070,8 @@ fn tip_for(d: &Desk, kind: usize) -> (Vec<String>, Rect) {
 fn hover(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
     let mut cbuf = [0u8; 28];
     let clock = clock_now(&mut cbuf);
-    let kind = desktop::panel_spots(&d.l, clock).iter().position(|r| r.inflate(4).contains(x, y));
+    // No tip over the open Wi-Fi drop-down.
+    let kind = desktop::panel_spots(&d.l, clock).iter().position(|r| r.inflate(4).contains(x, y)).filter(|_| d.wifi.is_none());
     if kind == d.tip.map(|t| t.0) {
         return;
     }
@@ -1126,7 +1135,93 @@ fn second_tick(d: &mut Desk, fb: &FbInfo) {
     }
 }
 
+/// Where the Wi-Fi drop-down goes: under the panel, by the network icon.
+fn wifi_rect(d: &Desk) -> Rect {
+    let mut cbuf = [0u8; 28];
+    let clock = clock_now(&mut cbuf);
+    let net = desktop::panel_spots(&d.l, clock)[0];
+    WifiFly::rect(net, d.l.panel.bottom(), d.l.w, &Fonts::for_screen(d.l.big()))
+}
+
+/// Work the Wi-Fi drop-down wants done; the shell task runs it (the helper link blocks for seconds).
+static WIFI_REQ: Global<Option<WifiReq>> = Global::new(None);
+
+/// After a key or click in the drop-down: hands its request on, closes it or redraws it.
+fn wifi_after(d: &mut Desk, fb: &FbInfo, out: wififly::Out) {
+    let r = wifi_rect(d).inflate(desktop::SHADOW);
+    if out == wififly::Out::Close {
+        d.wifi = None;
+    } else if let Some(req) = d.wifi.as_mut().and_then(|w| w.req.take()) {
+        // SAFETY: WIFI_REQ is only touched with interrupts off (here and in `take_wifi_request`).
+        *unsafe { WIFI_REQ.get() } = Some(req);
+    }
+    if out != wififly::Out::None || d.wifi.is_none() {
+        redraw(d, fb, r);
+    }
+}
+
+/// Opens the drop-down (it starts a scan) or closes it.
+fn toggle_wifi(d: &mut Desk, fb: &FbInfo) {
+    if d.wifi.is_some() {
+        wifi_after(d, fb, wififly::Out::Close);
+        return;
+    }
+    if let Some((_, old)) = d.tip.take() {
+        redraw(d, fb, old.inflate(desktop::SHADOW / 2));
+    }
+    d.wifi = Some(WifiFly::default());
+    wifi_after(d, fb, wififly::Out::Redraw);
+}
+
+/// The scan or connection the Wi-Fi drop-down asked for, if any (called by the shell task).
+pub fn take_wifi_request() -> Option<WifiReq> {
+    // SAFETY: see `wifi_after`.
+    arch::without_interrupts(|| unsafe { WIFI_REQ.get() }.take())
+}
+
+/// Hands a finished scan to the drop-down (if it is still open) and redraws it.
+pub fn wifi_scanned(r: Result<Vec<crate::wifihost::Net>, String>) {
+    arch::without_interrupts(|| {
+        let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
+        if let Some(w) = d.wifi.as_mut() {
+            w.scanned(r);
+            wifi_after(d, &fb, wififly::Out::Redraw);
+        }
+    })
+}
+
+/// Hands a finished connection attempt to the drop-down and redraws it (and the panel's bars).
+pub fn wifi_connected(ssid: &str, r: Result<(), String>) {
+    arch::without_interrupts(|| {
+        let (Some(d), Some(fb)) = (desk(), state().fb) else { return };
+        if let Some(w) = d.wifi.as_mut() {
+            w.connected(ssid, r);
+            wifi_after(d, &fb, wififly::Out::Redraw);
+        }
+        let p = d.l.panel;
+        redraw(d, &fb, p);
+    })
+}
+
 fn press(d: &mut Desk, fb: &FbInfo, x: i32, y: i32) {
+    // The network icon opens or closes the Wi-Fi drop-down; while it is open, clicks inside go to it and a
+    // click anywhere else closes it first.
+    let mut cbuf = [0u8; 28];
+    let net = desktop::panel_spots(&d.l, clock_now(&mut cbuf))[0];
+    if net.inflate(6).contains(x, y) {
+        toggle_wifi(d, fb);
+        return;
+    }
+    if d.wifi.is_some() {
+        let r = wifi_rect(d);
+        if r.contains(x, y) {
+            let f = Fonts::for_screen(d.l.big());
+            let out = d.wifi.as_mut().map_or(wififly::Out::None, |w| w.click(r, &f, x, y));
+            wifi_after(d, fb, out);
+            return;
+        }
+        wifi_after(d, fb, wififly::Out::Close);
+    }
     if let Some(app) = d.l.dock_hit(x, y) {
         if APPS[app].1.is_none() {
             open_app(d, fb, app);
@@ -1310,6 +1405,12 @@ pub fn desk_key(k: Key) -> bool {
         }
         if d.palette.is_some() {
             palette_key(d, &fb, k);
+            return true;
+        }
+        // The open Wi-Fi drop-down takes every key (its password box, arrows, Enter, Esc).
+        if let Some(w) = d.wifi.as_mut() {
+            let out = w.key(k);
+            wifi_after(d, &fb, out);
             return true;
         }
         if k == Key::Ctrl(b'm') {

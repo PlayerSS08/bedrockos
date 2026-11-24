@@ -72,7 +72,8 @@ extern "C" fn worker(slot: usize) {
 }
 
 /// Reads one raw byte from the PS/2 controller, if any (mouse bytes are skipped).
-fn ps2_byte() -> Option<u8> {
+/// One byte from the PS/2 keyboard, if waiting (also used by the sign-in screen before the shell runs).
+pub fn ps2_byte() -> Option<u8> {
     // SAFETY: standard PS/2 controller ports; reading the data port pops one byte from its buffer.
     unsafe {
         let status = arch::inb(0x64);
@@ -945,6 +946,39 @@ fn wifi_autoconnect() {
     if let Some(n) = crate::wifihost::connected(&mut b) {
         out!("Wi-Fi: '{}' was chosen in the boot menu (through the host). Going online...\n", core::str::from_utf8(&b[..n]).unwrap_or("?"));
         cmd_dhcp("");
+    }
+}
+
+/// Runs what the desktop's Wi-Fi drop-down asked for and hands it the result. A successful connection also
+/// gets an address, like `wifi connect` (its output goes to ChatBox).
+fn wifi_desk_request(req: crate::wififly::WifiReq) {
+    use crate::wififly::WifiReq;
+    match req {
+        WifiReq::Scan => {
+            let mut nets = [crate::wifihost::Net::EMPTY; crate::wifihost::MAX_NETS];
+            let r = crate::wifihost::link::scan(&mut nets).map(|n| nets[..n].to_vec()).map_err(|e| {
+                // The full text does not fit the drop-down.
+                String::from(if e.as_str().starts_with("no helper") { "Wi-Fi helper is not running on the laptop" } else { e.as_str() })
+            });
+            if r.as_ref().is_ok_and(|v| !v.is_empty()) {
+                crate::achieve::unlock(crate::achieve::Id::WifiScan);
+            }
+            crate::bootfx::wifi_scanned(r);
+        }
+        WifiReq::Connect(ssid, mut pass) => {
+            let r = crate::wifihost::link::connect(&ssid, pass.as_bytes());
+            // SAFETY: zero bytes keep the string valid UTF-8.
+            unsafe { pass.as_bytes_mut().fill(0) };
+            match r {
+                Ok(_) => {
+                    crate::wifihost::set_connected(&ssid);
+                    out!("Wi-Fi: connected to '{}' from the top bar (through the host). Getting an address...\n", ssid);
+                    cmd_dhcp("");
+                    crate::bootfx::wifi_connected(&ssid, Ok(()));
+                }
+                Err(e) => crate::bootfx::wifi_connected(&ssid, Err(String::from(e.as_str()))),
+            }
+        }
     }
 }
 
@@ -4200,6 +4234,11 @@ pub extern "C" fn shell_task(_: usize) {
         if let Some(u) = crate::bootfx::take_browser_request() {
             let r = browser_fetch(&u);
             crate::bootfx::browser_loaded(&u, r);
+            idle = false;
+        }
+        // A scan or a connection the Wi-Fi drop-down (the top bar's network icon) asked for.
+        if let Some(req) = crate::bootfx::take_wifi_request() {
+            wifi_desk_request(req);
             idle = false;
         }
         // A USB mouse moves the pointer; the wheel scrolls the log (three lines a notch, up = older lines).

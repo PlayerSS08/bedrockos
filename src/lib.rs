@@ -99,6 +99,7 @@ pub mod touchpad;
 pub mod usbdesc;
 pub mod wifi;
 pub mod wifihost;
+pub mod wififly;
 pub mod usbfs;
 pub mod usbmsd;
 pub mod usbnet;
