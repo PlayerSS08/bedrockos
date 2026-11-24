@@ -946,6 +946,34 @@ fn wifi_autoconnect() {
     if let Some(n) = crate::wifihost::connected(&mut b) {
         out!("Wi-Fi: '{}' was chosen in the boot menu (through the host). Going online...\n", core::str::from_utf8(&b[..n]).unwrap_or("?"));
         cmd_dhcp("");
+        return;
+    }
+    boot_autonet();
+}
+
+/// At start-up, with nothing chosen in the boot menu: any link that is up (VM network card, Ethernet cable, or a
+/// phone with USB tethering on) gets an address by itself, so the desktop opens online without typing `dhcp`.
+/// Never sends a Wi-Fi connect to the host helper (that would switch the laptop's real Wi-Fi).
+fn boot_autonet() {
+    crate::netdev::ensure();
+    let dev = crate::netdev::device_name();
+    if crate::netdev::link_up() && dev != "none" && !dev.contains("loop") {
+        match crate::netstack::run_dhcp(3000) {
+            Ok((ip, _mask, gw, _dns)) => {
+                info!("net", "auto dhcp ok {} via {} (gateway {})", ip, dev, gw);
+                out!("Network: online at boot via {} - IP {} (gateway {})\n", dev, ip, gw);
+                return;
+            }
+            Err(msg) => {
+                info!("net", "auto dhcp failed on {}: {}", dev, msg);
+                out!("Network: {} is connected but DHCP failed ({}). Try `dhcp`.\n", dev, msg);
+                return;
+            }
+        }
+    }
+    if find_wifi_hw().is_some() {
+        info!("net", "auto dhcp skipped: Wi-Fi chip has no driver, no wired/USB link");
+        out!("Network: Wi-Fi chip found but it has no driver yet. To get online: plug in an Android phone,\n  turn on Settings > Hotspot & tethering > USB tethering, then type `dhcp` (or use an Ethernet cable).\n");
     }
 }
 
