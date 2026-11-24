@@ -469,8 +469,8 @@ fn cmd_usb(rest: &str) {
 
 // ---- keeping files across reboots ------------------------------------------------------------------------------
 
-/// Where the RAM filesystem is saved on the AEON USB volume.
-const SNAPSHOT: &str = "/usb/AEONFS.BIN";
+/// Where the RAM filesystem is saved on the BEDROCK USB volume.
+const SNAPSHOT: &str = "/usb/BEDROCK.BIN";
 static SAVED_FP: core::sync::atomic::AtomicU64 = core::sync::atomic::AtomicU64::new(0);
 static UNSAVED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
 static WARNED: core::sync::atomic::AtomicBool = core::sync::atomic::AtomicBool::new(false);
@@ -559,19 +559,19 @@ fn persist_save(force: bool) {
 }
 
 /// Saves the file snapshot on the computer's own disk (the first FAT volume of the AHCI disk). Written twice,
-/// first as AEONFS.NEW, then as AEONFS.BIN, so a power cut in the middle of one write leaves the other whole
+/// first as BEDROCK.NEW, then as BEDROCK.BIN, so a power cut in the middle of one write leaves the other whole
 /// (restore takes the first one that decodes).
 fn disk_save(data: &[u8]) -> Result<(), &'static str> {
     crate::ahci::with_disk(|d| {
-        crate::usbfs::write_file(d, "AEONFS.NEW", data, true)?;
-        crate::usbfs::write_file(d, "AEONFS.BIN", data, true)
+        crate::usbfs::write_file(d, "BEDROCK.NEW", data, true)?;
+        crate::usbfs::write_file(d, "BEDROCK.BIN", data, true)
     })
     .ok_or("no disk")?
 }
 
 fn disk_load() -> Option<Vec<u8>> {
     crate::ahci::with_disk(|d| {
-        ["AEONFS.BIN", "AEONFS.NEW"].iter().find_map(|name| {
+        ["BEDROCK.BIN", "BEDROCK.NEW"].iter().find_map(|name| {
             crate::usbfs::read_file(d, name, crate::persist::MAX_TOTAL + 4096).ok().filter(|b| crate::persist::decode(b).is_ok())
         })
     })
@@ -872,7 +872,7 @@ fn cmd_report() {
     let mut raw: Vec<u8> = Vec::new();
     log::replay(|b| raw.extend_from_slice(b));
     r.push_str(&String::from_utf8_lossy(&raw));
-    // Plain 8.3 name on the AEON stick; if the stick cannot be written the text stays in memory and is shown.
+    // Plain 8.3 name on the BEDROCK stick; if the stick cannot be written the text stays in memory and is shown.
     match save_bytes("/usb/REPORT.TXT", r.as_bytes()) {
         Ok(where_) => out!("report written: {} ({} bytes). Shut down, plug the stick into another PC and open REPORT.TXT.\n", where_, r.len()),
         Err(e) => {
@@ -1167,7 +1167,7 @@ fn cmd_ethernet(rest: &str) {
     }
 }
 
-/// Saves `data` to `name`: on the AEON USB volume for `/usb/...` paths (read-only volumes and `EFI/` are refused),
+/// Saves `data` to `name`: on the BEDROCK USB volume for `/usb/...` paths (read-only volumes and `EFI/` are refused),
 /// otherwise in the RAM filesystem. Returns a short description of where it went.
 fn save_bytes(name: &str, data: &[u8]) -> Result<String, String> {
     let p = path_arg(name).ok_or_else(|| alloc::format!("bad path '{name}'"))?;
@@ -1369,16 +1369,16 @@ fn cmd_netstat() {
     out!("udp        0      0 {}:68             0.0.0.0:*               CONNECTED\n", ip);
 }
 
-/// Copies a package file to the AEON USB stick (`aeonpkg/...`) so it survives power off. Quietly skipped when
-/// there is no writable AEON volume; says why once.
+/// Copies a package file to the BEDROCK USB stick (`bedrockpkg/...`) so it survives power off. Quietly skipped when
+/// there is no writable BEDROCK volume; says why once.
 fn usb_persist(warned: &mut bool, rel: &str, data: &[u8]) {
     if !crate::xhci::has_storage() {
         return;
     }
-    let path = alloc::format!("aeonpkg/{rel}");
-    let _ = usbfs::hw_mkdir("aeonpkg");
+    let path = alloc::format!("bedrockpkg/{rel}");
+    let _ = usbfs::hw_mkdir("bedrockpkg");
     if rel.contains('/') {
-        let _ = usbfs::hw_mkdir("aeonpkg/pool");
+        let _ = usbfs::hw_mkdir("bedrockpkg/pool");
     }
     if let Err(why) = usbfs::hw_write(&path, data, true) {
         if !*warned {
@@ -1393,7 +1393,7 @@ fn usb_serial() -> u64 {
     if !crate::xhci::has_storage() {
         return 0;
     }
-    usbfs::hw_read("aeonpkg/serial", 64).ok().and_then(|d| String::from_utf8(d).ok()).and_then(|s| s.trim().parse().ok()).unwrap_or(0)
+    usbfs::hw_read("bedrockpkg/serial", 64).ok().and_then(|d| String::from_utf8(d).ok()).and_then(|s| s.trim().parse().ok()).unwrap_or(0)
 }
 
 /// Serves repository files from the stick (`apt restore`).
@@ -1401,11 +1401,11 @@ struct UsbFetcher;
 
 impl crate::apt::Fetcher for UsbFetcher {
     fn get(&mut self, rel: &str, max: usize) -> Result<alloc::vec::Vec<u8>, String> {
-        usbfs::hw_read(&alloc::format!("aeonpkg/{rel}"), max).map_err(|why| alloc::format!("aeonpkg/{rel} on the USB stick: {why}"))
+        usbfs::hw_read(&alloc::format!("bedrockpkg/{rel}"), max).map_err(|why| alloc::format!("bedrockpkg/{rel} on the USB stick: {why}"))
     }
 }
 
-const APT_HELP: &str = "apt: signed packages over plain HTTP (not Debian's apt: no .deb, no Linux programs)\n  apt source <http://host[:port]/path/>   set the repository (needs a PC running tools/aeon_repo.py serve)\n  apt update                              download and verify the package list\n  apt list [--installed] | search <text> | show <pkg> | files <pkg>\n  apt install <pkg>...                    install with dependencies (SHA-256 + signature checked)\n  apt reinstall <pkg>...                  reinstall already installed packages\n  apt upgrade                             upgrade installed packages to newest version\n  apt full-upgrade                        upgrade packages, removing obsolete dependencies if needed\n  apt remove <pkg>... | autoremove\n  apt restore                             reinstall what was saved on the AEON stick (works offline)\n";
+const APT_HELP: &str = "apt: signed packages over plain HTTP (not Debian's apt: no .deb, no Linux programs)\n  apt source <http://host[:port]/path/>   set the repository (needs a PC running tools/bedrock_repo.py serve)\n  apt update                              download and verify the package list\n  apt list [--installed] | search <text> | show <pkg> | files <pkg>\n  apt install <pkg>...                    install with dependencies (SHA-256 + signature checked)\n  apt reinstall <pkg>...                  reinstall already installed packages\n  apt upgrade                             upgrade installed packages to newest version\n  apt full-upgrade                        upgrade packages, removing obsolete dependencies if needed\n  apt remove <pkg>... | autoremove\n  apt restore                             reinstall what was saved on the BEDROCK stick (works offline)\n";
 
 const SNAP_HELP: &str = "snap: the Bedrock Snap Store (built in, works offline)\n  snap list                 installed apps (also: ls /snap)\n  snap find [text]          apps in the store\n  snap info <app>           details of an app\n  snap install <app>...     install apps\n  snap remove <app>...      remove apps\n  snap refresh              update installed apps\n  snap run <app> [args]     start an app (installed command apps also run by name, e.g. `cowsay hi`)\n";
 
@@ -1663,7 +1663,7 @@ fn cmd_apt(rest: &str) {
                 out!("apt: {}\n", e);
                 return;
             }
-            let names = match usbfs::hw_read("aeonpkg/installed", 64 * 1024) {
+            let names = match usbfs::hw_read("bedrockpkg/installed", 64 * 1024) {
                 Ok(d) => String::from_utf8_lossy(&d).into_owned(),
                 Err(_) => {
                     out!("apt: nothing saved on the stick yet (install something with the stick plugged in first)\n");
@@ -3626,7 +3626,7 @@ fn cmd_extra(cmd: &str, rest: &str) {
         "about" => {
             out!("BedrockOS {}: a small Rust operating system that boots on UEFI PCs and in VirtualBox.\n", crate::VERSION);
             out!("Desktop with ChatBox (this shell), Notes, Tasks and Help; networking over the laptop's connection.\n");
-            out!("Based on Aeon 0.11.0. Fonts: Inter and JetBrains Mono (SIL Open Font License 1.1).\n");
+            out!("Based on Bedrock 0.11.0. Fonts: Inter and JetBrains Mono (SIL Open Font License 1.1).\n");
         }
         "achievements" => {
             out!("Achievements: {} of {}\n", crate::achieve::count(), crate::achieve::LIST.len());
@@ -4066,8 +4066,8 @@ fn run_plain(line: &str, hist: &History) {
         "hexdump" => cmd_hexdump(rest),
         "seq" => cmd_seq(rest),
         "sleep" => cmd_sleep(rest),
-        "whoami" => out!("aeon (BedrockOS has no user accounts: everything runs with full rights)\n"),
-        "hostname" => out!("aeon\n"),
+        "whoami" => out!("Notch\n"),
+        "hostname" => out!("bedrock\n"),
         "date" => cmd_date(),
         "clear" | "cls" => {
             log::with_console(Console::clear_log);

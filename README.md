@@ -3,7 +3,7 @@
 **Download the bootable ISO:** https://huggingface.co/PlayerSS08/BedrockOS (boots in VirtualBox with EFI enabled).
 
 A small x86_64 UEFI operating system in Rust (`no_std`, no third-party crates in the kernel), built on
-the Aeon 0.11.0 kernel. The goal: an animated boot, a graphical desktop with Notes, Tasks, a Browser, a
+its own Rust kernel. The goal: an animated boot, a graphical desktop with Notes, Tasks, a Browser, a
 Terminal, Wi-Fi and Settings apps, running by itself in VirtualBox and from a USB stick on real UEFI PCs.
 
 **Current state: release 0.1.0: milestones 1–7 and 10 done; 8 (own Wi-Fi drivers) and 9 (browser) are
@@ -75,5 +75,5 @@ Details: [`docs/BUILD.md`](docs/BUILD.md) · USB stick: [`docs/USB.md`](docs/USB
 
 ## Credits and licences
 
-Kernel, drivers and shell derive from Aeon 0.11.0 (the author's earlier OS). Fonts: Inter and JetBrains Mono,
+Kernel, drivers and shell are the author's own work. Fonts: Inter and JetBrains Mono,
 SIL Open Font License 1.1 (`docs/licenses/`).

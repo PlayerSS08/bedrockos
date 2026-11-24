@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
-use aeonrt::{entry, exit, fork, getpid, print, print_num, wait};
+use bedrockrt::{entry, exit, fork, getpid, print, print_num, wait};
 
-fn main(_: aeonrt::Args) -> i32 {
+fn main(_: bedrockrt::Args) -> i32 {
     let pid = fork();
     if pid < 0 {
         print("forktest: fork failed\n");

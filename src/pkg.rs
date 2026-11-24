@@ -48,7 +48,7 @@ impl core::fmt::Display for PkgError {
             PkgError::SizeMismatch => write!(f, "the downloaded file has a different size than the index says"),
             PkgError::InfoMismatch => write!(f, "the package's own PKGINFO disagrees with the index"),
             PkgError::Conflict { path, owner } => write!(f, "'{path}' already belongs to package '{owner}'"),
-            PkgError::NoSerial => write!(f, "the package index has no Serial line (rebuild it with a current tools/aeon_repo.py)"),
+            PkgError::NoSerial => write!(f, "the package index has no Serial line (rebuild it with a current tools/bedrock_repo.py)"),
             PkgError::Rollback { offered, seen } => write!(f, "the repository offered an OLDER package list (serial {offered}, already seen {seen}): refusing, this could be a rollback attack"),
         }
     }

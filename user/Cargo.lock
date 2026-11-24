@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "aeonrt"
+name = "bedrockrt"
 version = "0.11.0"

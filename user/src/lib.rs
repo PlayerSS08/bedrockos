@@ -1,4 +1,4 @@
-//! Runtime for Aeon programs: system calls, program start-up and a few helpers. No heap, no std.
+//! Runtime for Bedrock programs: system calls, program start-up and a few helpers. No heap, no std.
 #![no_std]
 
 use core::arch::{asm, global_asm};
@@ -156,20 +156,20 @@ global_asm!(
     "_start:",
     "mov rdi, rsp",
     "and rsp, -16",
-    "call aeon_start",
+    "call bedrock_start",
     "ud2",
 );
 
 unsafe extern "C" {
-    fn aeon_main(argc: usize, argv: *const *const u8) -> i32;
+    fn bedrock_main(argc: usize, argv: *const *const u8) -> i32;
 }
 
 /// # Safety
 /// Called only by `_start` with the start-up stack pointer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn aeon_start(sp: *const u64) -> ! {
+pub unsafe extern "C" fn bedrock_start(sp: *const u64) -> ! {
     // SAFETY: the kernel laid out argc, then the argv pointers, at the initial stack pointer.
-    let code = unsafe { aeon_main(*sp as usize, sp.add(1) as *const *const u8) };
+    let code = unsafe { bedrock_main(*sp as usize, sp.add(1) as *const *const u8) };
     exit(code)
 }
 
@@ -178,7 +178,7 @@ pub unsafe extern "C" fn aeon_start(sp: *const u64) -> ! {
 macro_rules! entry {
     ($f:path) => {
         #[unsafe(no_mangle)]
-        pub extern "C" fn aeon_main(argc: usize, argv: *const *const u8) -> i32 {
+        pub extern "C" fn bedrock_main(argc: usize, argv: *const *const u8) -> i32 {
             let f: fn($crate::Args) -> i32 = $f;
             f(unsafe { $crate::Args::from_raw(argc, argv) })
         }

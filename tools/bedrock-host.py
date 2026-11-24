@@ -11,7 +11,7 @@ It does two jobs BedrockOS cannot do inside a virtual machine:
    (`netsh wlan show networks`) and makes the LAPTOP join the network chosen in BedrockOS (`netsh wlan connect`,
    adding a WPA2 profile with the password first when the laptop does not know the network). BedrockOS then
    reaches the internet through it. Protocol, one line each, fields separated by tabs:
-       HELLO                      -> AEONWIFI 1
+       HELLO                      -> BEDROCKWIFI 1
        SCAN                       -> NET signal secure current ssid ... then END
        CONNECT ssid password      -> OK text | ERR text
 
@@ -240,7 +240,7 @@ def wifi_loop():
                 buf = b""
                 cmd = fields[0]
                 if cmd == "HELLO":
-                    lines = ["AEONWIFI 1"]
+                    lines = ["BEDROCKWIFI 1"]
                 elif cmd == "SCAN":
                     lines = scan()
                     print(f"[wifi] scan: {len(lines) - 1} networks", flush=True)

@@ -360,7 +360,7 @@ mod tests {
     impl SimAp {
         fn new(quirks: Quirks) -> Self {
             Self {
-                ssid: b"AeonNet".to_vec(),
+                ssid: b"BedrockNet".to_vec(),
                 psk: "BedrockOS-pass-1234",
                 channel: 6,
                 on_channel: 0,
@@ -518,7 +518,7 @@ mod tests {
     fn join(quirks: Quirks) -> (Station<SimAp>, Result<(), WifiError>) {
         let mut st = Station::new(SimAp::new(quirks));
         let found = st.scan(&CHANNELS_24, 5);
-        let bss = found.iter().find(|b| b.ssid == b"AeonNet").cloned().expect("scan must find the AP");
+        let bss = found.iter().find(|b| b.ssid == b"BedrockNet").cloned().expect("scan must find the AP");
         let r = st.connect(&bss, "BedrockOS-pass-1234", [0x31; 32]);
         (st, r)
     }
@@ -535,7 +535,7 @@ mod tests {
         let mut st = Station::new(SimAp::new(Quirks::default()));
         let found = st.scan(&CHANNELS_24, 5);
         assert_eq!(found.len(), 1);
-        assert_eq!((found[0].channel, found[0].ssid_str().as_str()), (6, "AeonNet"));
+        assert_eq!((found[0].channel, found[0].ssid_str().as_str()), (6, "BedrockNet"));
         assert!(found[0].supports_wpa2_psk_ccmp());
         assert!(st.scan(&[1, 2, 3], 5).is_empty());
     }

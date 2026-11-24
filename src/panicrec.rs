@@ -5,7 +5,7 @@
 use crate::boot;
 use crate::uefi::{self, RuntimeServices};
 
-const NAME: [u16; 14] = uefi::utf16(b"AeonLastPanic\0");
+const NAME: [u16; 17] = uefi::utf16(b"BedrockLastPanic\0");
 pub const MAX_LEN: usize = 160;
 
 fn rt() -> Option<&'static RuntimeServices> {
@@ -24,22 +24,22 @@ pub fn record(text: &[u8]) -> bool {
         buf[n] = if (0x20..0x7F).contains(&b) { b } else { b'?' };
         n += 1;
     }
-    (rt.set_variable)(NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS_RT, n, buf.as_ptr()) == uefi::SUCCESS
+    (rt.set_variable)(NAME.as_ptr(), &uefi::BEDROCK_GUID, uefi::VAR_NV_BS_RT, n, buf.as_ptr()) == uefi::SUCCESS
 }
 
 /// Reads and deletes the record left by the previous boot. Returns the text length written to `out`.
 pub fn take(rt: &RuntimeServices, out: &mut [u8; MAX_LEN]) -> usize {
     let mut size = out.len();
     let mut attr = 0u32;
-    let s = (rt.get_variable)(NAME.as_ptr(), &uefi::AEON_GUID, &mut attr, &mut size, out.as_mut_ptr());
+    let s = (rt.get_variable)(NAME.as_ptr(), &uefi::BEDROCK_GUID, &mut attr, &mut size, out.as_mut_ptr());
     if s != uefi::SUCCESS {
         if s == uefi::BUFFER_TOO_SMALL {
             // Not one of ours (too long): delete it so it cannot sit there forever.
-            let _ = (rt.set_variable)(NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS_RT, 0, core::ptr::null());
+            let _ = (rt.set_variable)(NAME.as_ptr(), &uefi::BEDROCK_GUID, uefi::VAR_NV_BS_RT, 0, core::ptr::null());
         }
         return 0;
     }
     // A zero-length write deletes the variable, so the record is shown once.
-    let _ = (rt.set_variable)(NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS_RT, 0, core::ptr::null());
+    let _ = (rt.set_variable)(NAME.as_ptr(), &uefi::BEDROCK_GUID, uefi::VAR_NV_BS_RT, 0, core::ptr::null());
     size.min(out.len())
 }

@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
-use aeonrt::{entry, getpid, print, print_num};
+use bedrockrt::{entry, getpid, print, print_num};
 
-fn main(args: aeonrt::Args) -> i32 {
+fn main(args: bedrockrt::Args) -> i32 {
     print("hello from /bin/hello, pid ");
     print_num(getpid() as u64);
     print(", ");

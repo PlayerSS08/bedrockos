@@ -771,7 +771,7 @@ fn settings_lines(page: usize, fb: &FbInfo) -> Vec<String> {
             push(String::from("A small Rust operating system for UEFI PCs and VirtualBox."));
             push(String::from("Desktop: ChatBox (shell), Notes, Tasks, Help, Settings."));
             push(String::from("# Licences"));
-            push(String::from("Based on Aeon 0.11.0."));
+            push(String::from("Based on Bedrock 0.11.0."));
             push(String::from("Fonts: Inter and JetBrains Mono, SIL Open Font License 1.1."));
         }
         1 => {

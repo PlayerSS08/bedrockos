@@ -46,7 +46,7 @@ pub static SANS_24: Face = Face {
     cov: &d::SANS_24_COV,
 };
 
-/// The big "AEON" lettering. Only those four letters exist; anything else draws as nothing.
+/// The big "BEDROCK" lettering. Only those four letters exist; anything else draws as nothing.
 pub static WORDMARK: Face = Face {
     size: d::WORDMARK_SIZE,
     ascent: d::WORDMARK_ASCENT,

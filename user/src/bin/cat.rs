@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-use aeonrt::{close, entry, eprint, open, read, write_all, O_RDONLY};
+use bedrockrt::{close, entry, eprint, open, read, write_all, O_RDONLY};
 
 fn copy(fd: usize) -> bool {
     let mut buf = [0u8; 2048];
@@ -18,7 +18,7 @@ fn copy(fd: usize) -> bool {
     }
 }
 
-fn main(args: aeonrt::Args) -> i32 {
+fn main(args: bedrockrt::Args) -> i32 {
     if args.len() < 2 {
         return if copy(0) { 0 } else { 1 };
     }

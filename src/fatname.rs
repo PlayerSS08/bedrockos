@@ -150,7 +150,7 @@ mod tests {
         // Computed with a separate Python implementation of the algorithm in the FAT specification.
         assert_eq!(checksum(b"README  TXT"), 0x73);
         assert_eq!(checksum(b"FOO     BAR"), 0x53);
-        assert_eq!(checksum(b"AEON       "), 0x8d);
+        assert_eq!(checksum(b"BEDROCK    "), 0x3a);
         assert_eq!(checksum(b"LONGNA~1TXT"), 0xf4);
     }
 
@@ -168,7 +168,7 @@ mod tests {
     #[test]
     fn exact_short_names() {
         assert_eq!(exact_short("README.TXT"), Some(*b"README  TXT"));
-        assert_eq!(exact_short("AEON"), Some(*b"AEON       "));
+        assert_eq!(exact_short("BEDROCK"), Some(*b"BEDROCK    "));
         assert_eq!(exact_short("A.B"), Some(*b"A       B  "));
         assert_eq!(exact_short("EIGHTCHR.EXT"), Some(*b"EIGHTCHREXT"));
         for no in ["readme.txt", "Readme.TXT", "NINECHARS.TXT", "A.LONG", "A.B.C", "HAS SPACE.TXT", ".HIDDEN", "A+B.TXT", "SEMI;.TXT", "", "CAF\u{c9}"] {
@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn short_names_display_like_a_person_writes_them() {
         assert_eq!(short_display(b"README  TXT"), "README.TXT");
-        assert_eq!(short_display(b"AEON       "), "AEON");
+        assert_eq!(short_display(b"BEDROCK    "), "BEDROCK");
         assert_eq!(short_display(b"A       B  "), "A.B");
     }
 

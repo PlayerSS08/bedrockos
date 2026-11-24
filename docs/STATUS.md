@@ -1,7 +1,7 @@
 # BedrockOS status
 
 Legend: **done** = built and checked as stated · **partial** = some of it works, the rest is listed ·
-**untested on hardware** = checked in VirtualBox only · **inherited** = Aeon 0.11.0 code, carried over,
+**untested on hardware** = checked in VirtualBox only · **inherited** = Bedrock 0.11.0 code, carried over,
 unit-tested on the host, not yet re-verified in BedrockOS beyond booting · **not done**.
 
 No feature has been tested on real hardware (USB stick on a PC) yet.
@@ -11,7 +11,7 @@ Last update: 2026-11-23: more apps (Files, Network, Calculator, Clock, Snake), m
 | Feature | Status | How it was checked |
 |---|---|---|
 | One-command build (`cargo xtask build`): `.efi`, `out/usb/`, `.img`, `.vdi` | done | Run on Windows 11 with Rust 1.100, Python 3.14, VirtualBox 7.2.22 |
-| Disk image: GPT, FAT32 ESP + empty FAT32 `BRDATA` data partition | done | Booted by VirtualBox EFI. The ESP is labelled `AEON` so the OS may write its saved files (AEONFS.BIN) there; `BRDATA` stays unused |
+| Disk image: GPT, FAT32 ESP + empty FAT32 `BRDATA` data partition | done | Booted by VirtualBox EFI. The ESP is labelled `BEDROCK` so the OS may write its saved files (BEDROCK.BIN) there; `BRDATA` stays unused |
 | VirtualBox scripts (`scripts/vbox.ps1`, `.bat`, `.sh`) | done (Windows); `.sh` untested | `vbox.ps1` created the VM and booted it; `vbox.sh` written, not run (no Linux/macOS host here) |
 | Boot in VirtualBox to the shell, 1024x768 and 1280x800 (the default now: it fits a laptop screen at 125% scaling with VirtualBox's own bars) | done, untested on hardware | `tests/vbox_boot.py`: 10/10 checks (serial markers, no panic, screenshot size, non-blank) |
 | Screen mode: keep firmware's mode when it is ≥1024x720 | done | unit test + VirtualBox at both sizes (before: VirtualBox's 7680x4320 was chosen) |
@@ -43,7 +43,7 @@ Last update: 2026-11-23: more apps (Files, Network, Calculator, Clock, Snake), m
 | Mouse pointer on the whole desktop | done | VirtualBox: movement injected with `PutMouseEvent`; screenshots show the pointer inside the Terminal window (drawn by the console) and on the top panel (drawn by the desktop), with nothing left behind when it crosses between them. Clicks are read but do nothing yet. Inherited glitch: a small pointer fragment can stay behind when text is drawn under the pointer |
 | Apps: Notes, Tasks, Help, Settings | done | Settings: About, Network (live address, gateway, DNS), System (uptime, memory, task list refreshed every second), Display. VirtualBox: `open settings`, arrow keys to System, screenshot shows live tasks |
 | Apps: Files (browse folders, preview text files, Delete twice to delete), Network (live link, address, gateway, DNS; Enter runs `nettest`), Calculator (keypad and keyboard, history), Clock (analog and digital, world clocks, stopwatch with laps), Snake (game) | done, untested on hardware | Unit tests in `apps2` (Files navigation and delete confirm, calculator keys and clicks, stopwatch, snake moves/eats/dies). VirtualBox screenshots: Files listing `/`, Calculator `12*(3+4)` = 84 with history, Clock with running stopwatch in IST, Snake board. Network window and Files deleting were not checked in VirtualBox |
-| Notes / tasks persistence | done in VirtualBox | Saved to the USB stick, or without one to the computer's own disk (AHCI write added; boot volume labelled AEON). Written twice (AEONFS.NEW then AEONFS.BIN) so a power cut leaves one whole copy. Checked: `task add`, `save`, VM reset, `task list` shows the task again |
+| Notes / tasks persistence | done in VirtualBox | Saved to the USB stick, or without one to the computer's own disk (AHCI write added; boot volume labelled BEDROCK). Written twice (BEDROCK.NEW then BEDROCK.BIN) so a power cut leaves one whole copy. Checked: `task add`, `save`, VM reset, `task list` shows the task again |
 | Wi-Fi through the laptop: `wifi scan` lists the networks the laptop sees, `wifi connect <name> <password>` makes the **laptop** join that network (helper `tools/bedrock-host.py` over the VM's COM2 pipe, `netsh wlan`) | scan and connect done in VirtualBox; joining a different real network not tried (it moves the laptop) | VirtualBox: `wifi scan` (fresh WlanScan) listed 3-4 nearby networks; `wifi connect` to the current network got an address; `wifi connect "BedrockTest Net" password123` (never-joined, quoted name) made a WPA profile, failed, removed it and the laptop stayed on its network. Networks the laptop never joined get a profile from the password (Open, WPA, WPA2, WPA3-Personal; not Enterprise or sign-in pages). BedrockOS cannot be on a different network than the laptop: one radio |
 | Own Wi-Fi in BedrockOS (without the laptop) | not done | a VM has no Wi-Fi radio; it would need a USB Wi-Fi dongle passed to the VM plus a driver for that chip |
 | Wi-Fi chip drivers | not done: **no supported chip yet** | milestone 8 |

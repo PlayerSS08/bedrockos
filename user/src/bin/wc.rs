@@ -1,6 +1,6 @@
 #![no_std]
 #![no_main]
-use aeonrt::{close, entry, eprint, open, print, print_num, read, O_RDONLY};
+use bedrockrt::{close, entry, eprint, open, print, print_num, read, O_RDONLY};
 
 fn count(fd: usize) -> Option<(u64, u64, u64)> {
     let mut buf = [0u8; 2048];
@@ -38,7 +38,7 @@ fn show(c: (u64, u64, u64)) {
     print_num(c.2);
 }
 
-fn main(args: aeonrt::Args) -> i32 {
+fn main(args: bedrockrt::Args) -> i32 {
     if args.len() < 2 {
         return match count(0) {
             Some(c) => {

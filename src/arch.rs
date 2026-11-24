@@ -454,10 +454,10 @@ impl Gate {
 static IDT: Global<[Gate; 256]> = Global::new([Gate::MISSING; 256]);
 
 unsafe extern "C" {
-    static aeon_isr_table: [usize; 32];
-    fn aeon_irq_timer_stub();
-    fn aeon_irq_yield_stub();
-    fn aeon_irq_ignore_stub();
+    static bedrock_isr_table: [usize; 32];
+    fn bedrock_irq_timer_stub();
+    fn bedrock_irq_yield_stub();
+    fn bedrock_irq_ignore_stub();
 }
 
 /// Sets the stack the CPU switches to when an interrupt or exception arrives from ring 3 (TSS.rsp0).
@@ -549,7 +549,7 @@ pub unsafe fn init_descriptors(kernel_stack_top: u64) {
     }
 
     // SAFETY: the table and stub symbols are provided by the global_asm! block below.
-    let table = unsafe { &aeon_isr_table };
+    let table = unsafe { &bedrock_isr_table };
     for (v, &h) in table.iter().enumerate() {
         let ist = match v {
             8 => IST_DOUBLE_FAULT,
@@ -559,12 +559,12 @@ pub unsafe fn init_descriptors(kernel_stack_top: u64) {
         idt[v] = Gate::interrupt(h, ist);
     }
     for gate in idt.iter_mut().take(48).skip(32) {
-        *gate = Gate::interrupt(aeon_irq_ignore_stub as *const () as usize, 0);
+        *gate = Gate::interrupt(bedrock_irq_ignore_stub as *const () as usize, 0);
     }
-    idt[32] = Gate::interrupt(aeon_irq_timer_stub as *const () as usize, 0);
-    idt[YIELD_VECTOR as usize] = Gate::interrupt(aeon_irq_yield_stub as *const () as usize, 0);
+    idt[32] = Gate::interrupt(bedrock_irq_timer_stub as *const () as usize, 0);
+    idt[YIELD_VECTOR as usize] = Gate::interrupt(bedrock_irq_yield_stub as *const () as usize, 0);
     // Local APIC spurious interrupts: no EOI, just return.
-    idt[crate::apic::SPURIOUS_VECTOR as usize] = Gate::interrupt(aeon_irq_ignore_stub as *const () as usize, 0);
+    idt[crate::apic::SPURIOUS_VECTOR as usize] = Gate::interrupt(bedrock_irq_ignore_stub as *const () as usize, 0);
 
     let idtr = DescPtr { limit: (core::mem::size_of::<[Gate; 256]>() - 1) as u16, base: idt.as_ptr() as u64 };
     // SAFETY: `idtr` describes the static IDT filled in above.
@@ -578,16 +578,16 @@ global_asm!(
     r#"
     .macro ISR_NOERR n
     .p2align 4
-    aeon_isr_\n:
+    bedrock_isr_\n:
         push 0
         push \n
-        jmp aeon_isr_common
+        jmp bedrock_isr_common
     .endm
     .macro ISR_ERR n
     .p2align 4
-    aeon_isr_\n:
+    bedrock_isr_\n:
         push \n
-        jmp aeon_isr_common
+        jmp bedrock_isr_common
     .endm
 
     .text
@@ -625,7 +625,7 @@ global_asm!(
     ISR_NOERR 31
 
     .p2align 4
-    aeon_isr_common:
+    bedrock_isr_common:
         push rax
         push rcx
         push rdx
@@ -644,7 +644,7 @@ global_asm!(
         mov rcx, rsp
         sub rsp, 32
         cld
-        call aeon_exception_entry
+        call bedrock_exception_entry
     3:
         cli
         hlt
@@ -652,7 +652,7 @@ global_asm!(
 
     // Scheduler entry points. Both save the full CPU state (general registers plus the x87/SSE
     // state, which compiled code uses freely), hand the resulting stack pointer to
-    // `aeon_sched_irq`, and resume whatever stack it returns. The stack pointer therefore *is* the
+    // `bedrock_sched_irq`, and resume whatever stack it returns. The stack pointer therefore *is* the
     // task context. rdx tells the handler whether this was the timer (1) or a voluntary yield (0).
     // Frame, low to high: fxsave[512] r15..rax rip cs rflags rsp ss.
     .macro SWITCH_STUB name, is_timer
@@ -679,7 +679,7 @@ global_asm!(
         mov edx, \is_timer
         sub rsp, 32
         cld
-        call aeon_sched_irq
+        call bedrock_sched_irq
         mov rsp, rax
         fxrstor [rsp]
         add rsp, 512
@@ -701,41 +701,41 @@ global_asm!(
         iretq
     .endm
 
-    SWITCH_STUB aeon_irq_timer_stub, 1
-    SWITCH_STUB aeon_irq_yield_stub, 0
+    SWITCH_STUB bedrock_irq_timer_stub, 1
+    SWITCH_STUB bedrock_irq_yield_stub, 0
 
     .p2align 4
-    aeon_irq_ignore_stub:
+    bedrock_irq_ignore_stub:
         iretq
 
     .section .rdata,"dr"
     .p2align 3
-    .globl aeon_isr_table
-    aeon_isr_table:
-        .quad aeon_isr_0, aeon_isr_1, aeon_isr_2, aeon_isr_3, aeon_isr_4, aeon_isr_5, aeon_isr_6, aeon_isr_7
-        .quad aeon_isr_8, aeon_isr_9, aeon_isr_10, aeon_isr_11, aeon_isr_12, aeon_isr_13, aeon_isr_14, aeon_isr_15
-        .quad aeon_isr_16, aeon_isr_17, aeon_isr_18, aeon_isr_19, aeon_isr_20, aeon_isr_21, aeon_isr_22, aeon_isr_23
-        .quad aeon_isr_24, aeon_isr_25, aeon_isr_26, aeon_isr_27, aeon_isr_28, aeon_isr_29, aeon_isr_30, aeon_isr_31
+    .globl bedrock_isr_table
+    bedrock_isr_table:
+        .quad bedrock_isr_0, bedrock_isr_1, bedrock_isr_2, bedrock_isr_3, bedrock_isr_4, bedrock_isr_5, bedrock_isr_6, bedrock_isr_7
+        .quad bedrock_isr_8, bedrock_isr_9, bedrock_isr_10, bedrock_isr_11, bedrock_isr_12, bedrock_isr_13, bedrock_isr_14, bedrock_isr_15
+        .quad bedrock_isr_16, bedrock_isr_17, bedrock_isr_18, bedrock_isr_19, bedrock_isr_20, bedrock_isr_21, bedrock_isr_22, bedrock_isr_23
+        .quad bedrock_isr_24, bedrock_isr_25, bedrock_isr_26, bedrock_isr_27, bedrock_isr_28, bedrock_isr_29, bedrock_isr_30, bedrock_isr_31
     .text
     "#
 );
 
 /// Timer ticks since `start_timer`, incremented by the scheduler's timer handler.
-static AEON_TICKS: AtomicU64 = AtomicU64::new(0);
+static BEDROCK_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// Software-interrupt vector used by `sched::yield_now`.
 pub const YIELD_VECTOR: u8 = 0x30;
 
 /// Counts one timer tick and acknowledges the PIC (IRQ0). Called with interrupts disabled.
 pub fn timer_tick() {
-    AEON_TICKS.fetch_add(1, Ordering::Relaxed);
+    BEDROCK_TICKS.fetch_add(1, Ordering::Relaxed);
     if !crate::apic::eoi() {
         // SAFETY: end-of-interrupt command to the master 8259.
         unsafe { outb(0x20, 0x20) };
     }
 }
 
-/// Register frame built by `aeon_isr_common` (lowest address first).
+/// Register frame built by `bedrock_isr_common` (lowest address first).
 #[repr(C)]
 pub struct ExcFrame {
     pub r15: u64,
@@ -799,10 +799,10 @@ const EXC_NAMES: [&str; 32] = [
 
 static IN_EXCEPTION: AtomicBool = AtomicBool::new(false);
 
-/// Called from `aeon_isr_common`. Reports the fault on every log sink and halts.
+/// Called from `bedrock_isr_common`. Reports the fault on every log sink and halts.
 #[unsafe(no_mangle)]
-extern "C" fn aeon_exception_entry(frame: *const ExcFrame) -> ! {
-    // SAFETY: `aeon_isr_common` passes the address of the frame it just built on the stack.
+extern "C" fn bedrock_exception_entry(frame: *const ExcFrame) -> ! {
+    // SAFETY: `bedrock_isr_common` passes the address of the frame it just built on the stack.
     let f = unsafe { &*frame };
     // NMI, double fault and machine check mean damaged state or a hardware error: always fatal, never a task kill.
     if f.cs & 3 == 3 && f.vector != 2 && f.vector != 8 && f.vector != 18 {
@@ -810,7 +810,7 @@ extern "C" fn aeon_exception_entry(frame: *const ExcFrame) -> ! {
         crate::usermode::user_fault(f, EXC_NAMES.get(f.vector as usize).copied().unwrap_or("unknown"), read_cr2());
     }
     if IN_EXCEPTION.swap(true, Ordering::SeqCst) {
-        crate::log::raw_panic_line("[AEON] nested exception, halting\n");
+        crate::log::raw_panic_line("[BEDROCK] nested exception, halting\n");
         halt_forever();
     }
     let name = EXC_NAMES.get(f.vector as usize).copied().unwrap_or("unknown");
@@ -896,7 +896,7 @@ pub unsafe fn mask_pic() {
 /// `TIMER_HZ`. Interrupts stay disabled; the caller enables them with `sti`.
 ///
 /// # Safety
-/// The IDT must already route vector 32 to `aeon_irq_timer_stub`, and interrupts must be off.
+/// The IDT must already route vector 32 to `bedrock_irq_timer_stub`, and interrupts must be off.
 pub unsafe fn start_timer() {
     const PIT_BASE_HZ: u64 = 1_193_182;
     let divisor = (PIT_BASE_HZ / TIMER_HZ) as u16;
@@ -911,7 +911,7 @@ pub unsafe fn start_timer() {
 }
 
 pub fn ticks() -> u64 {
-    AEON_TICKS.load(Ordering::Relaxed)
+    BEDROCK_TICKS.load(Ordering::Relaxed)
 }
 
 pub fn enable_interrupts() {

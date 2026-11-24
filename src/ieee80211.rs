@@ -400,9 +400,9 @@ mod tests {
 
     #[test]
     fn beacon_parsing_and_wpa2_detection() {
-        let b = parse_bss(&beacon(b"AeonNet", 36, Some(&RSN_WPA2_PSK_CCMP))).unwrap();
+        let b = parse_bss(&beacon(b"BedrockNet", 36, Some(&RSN_WPA2_PSK_CCMP))).unwrap();
         assert_eq!((b.bssid, b.channel, b.privacy), (AP, 36, true));
-        assert_eq!(b.ssid_str(), "AeonNet");
+        assert_eq!(b.ssid_str(), "BedrockNet");
         assert!(b.supports_wpa2_psk_ccmp());
         // 802.1X (enterprise) is not supported, nor is a network with no RSN element at all.
         let mut ent = RSN_WPA2_PSK_CCMP;
@@ -417,7 +417,7 @@ mod tests {
 
     #[test]
     fn truncated_and_random_frames_never_panic() {
-        let good = beacon(b"AeonNet", 6, Some(&RSN_WPA2_PSK_CCMP));
+        let good = beacon(b"BedrockNet", 6, Some(&RSN_WPA2_PSK_CCMP));
         for n in 0..good.len() {
             let _ = parse_bss(&good[..n]);
             let _ = parse_auth_response(&good[..n], &AP);
@@ -445,11 +445,11 @@ mod tests {
         let a = auth_request(&ME, &AP, 1);
         assert_eq!(a.len(), HDR_LEN + 6);
         assert_eq!((a[0], &a[4..10], &a[10..16]), (FC_AUTH, &AP[..], &ME[..]));
-        let bss = parse_bss(&beacon(b"AeonNet", 1, Some(&RSN_WPA2_PSK_CCMP))).unwrap();
+        let bss = parse_bss(&beacon(b"BedrockNet", 1, Some(&RSN_WPA2_PSK_CCMP))).unwrap();
         let r = assoc_request(&ME, &bss, &RSN_WPA2_PSK_CCMP, 2);
         assert!(r.ends_with(&RSN_WPA2_PSK_CCMP));
         let ssid_ie = elements(&r[HDR_LEN + 4..]).next().unwrap();
-        assert_eq!(ssid_ie, (0, &b"AeonNet"[..]));
+        assert_eq!(ssid_ie, (0, &b"BedrockNet"[..]));
     }
 
     /// A frame the AP would send to us: from-DS, protected, addressed to ME from `sa`.

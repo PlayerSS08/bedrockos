@@ -409,7 +409,7 @@ pub const SIMPLE_FS_GUID: Guid = Guid {
 };
 
 /// Vendor GUID for BedrockOS's own variables (boot counter).
-pub const AEON_GUID: Guid = Guid {
+pub const BEDROCK_GUID: Guid = Guid {
     data1: 0x5ae0a1c0,
     data2: 0x6b1d,
     data3: 0x4f0e,

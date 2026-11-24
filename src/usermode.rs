@@ -45,10 +45,10 @@ const SFMASK: u64 = 0x100 | 0x200 | 0x400 | 0x4000 | 0x4_0000;
 
 /// Kernel stack the `syscall` entry switches to; kept equal to TSS.rsp0 for the running task.
 #[unsafe(no_mangle)]
-static AEON_SYSCALL_KSTACK: AtomicU64 = AtomicU64::new(0);
+static BEDROCK_SYSCALL_KSTACK: AtomicU64 = AtomicU64::new(0);
 /// Holds the user stack pointer for the few instructions between `syscall` and the stack switch.
 #[unsafe(no_mangle)]
-static AEON_SYSCALL_SCRATCH: AtomicU64 = AtomicU64::new(0);
+static BEDROCK_SYSCALL_SCRATCH: AtomicU64 = AtomicU64::new(0);
 
 /// Set once `init` has enabled `syscall`; without it a ring-3 task could never make a call or exit.
 static READY: AtomicBool = AtomicBool::new(false);
@@ -89,7 +89,7 @@ fn wait_fs() {
 // Register frame and entry stub
 // ---------------------------------------------------------------------------------------------
 
-/// Registers saved by `aeon_syscall_entry`, lowest address first.
+/// Registers saved by `bedrock_syscall_entry`, lowest address first.
 #[repr(C)]
 pub struct SysFrame {
     r15: u64,
@@ -119,19 +119,19 @@ pub struct SysFrame {
 pub unsafe fn set_kernel_stack(top: u64) {
     // SAFETY: forwarded contract.
     unsafe { arch::set_rsp0(top) };
-    AEON_SYSCALL_KSTACK.store(top, Ordering::Relaxed);
+    BEDROCK_SYSCALL_KSTACK.store(top, Ordering::Relaxed);
 }
 
 global_asm!(
     r#"
     .text
     .p2align 4
-    .globl aeon_syscall_entry
-    aeon_syscall_entry:
+    .globl bedrock_syscall_entry
+    bedrock_syscall_entry:
         // rcx = user rip, r11 = user rflags, rax = number, rdi/rsi/rdx/r10/r8/r9 = arguments, interrupts masked.
-        mov [rip + AEON_SYSCALL_SCRATCH], rsp
-        mov rsp, [rip + AEON_SYSCALL_KSTACK]
-        push qword ptr [rip + AEON_SYSCALL_SCRATCH]   // user rsp lives on this task's own kernel stack
+        mov [rip + BEDROCK_SYSCALL_SCRATCH], rsp
+        mov rsp, [rip + BEDROCK_SYSCALL_KSTACK]
+        push qword ptr [rip + BEDROCK_SYSCALL_SCRATCH]   // user rsp lives on this task's own kernel stack
         push r11
         push rcx
         push rax
@@ -156,7 +156,7 @@ global_asm!(
         fxsave [rsp]
         sub rsp, 32
         cld
-        call aeon_syscall_dispatch
+        call bedrock_syscall_dispatch
         add rsp, 32
         fxrstor [rsp]
         mov rsp, rbx
@@ -180,8 +180,8 @@ global_asm!(
 
     // Demo programs, copied to the start of a fresh address space. Position independent.
     .p2align 4
-    .globl aeon_user_hello_start
-    aeon_user_hello_start:
+    .globl bedrock_user_hello_start
+    bedrock_user_hello_start:
         mov edi, 1
         lea rsi, [rip + 2f]
         mov edx, 18
@@ -193,34 +193,34 @@ global_asm!(
     1:  jmp 1b
     2:  .ascii "hello from ring 3\n"
     3:
-    .globl aeon_user_hello_end
-    aeon_user_hello_end:
+    .globl bedrock_user_hello_end
+    bedrock_user_hello_end:
 
-    .globl aeon_user_fault_start
-    aeon_user_fault_start:
+    .globl bedrock_user_fault_start
+    bedrock_user_fault_start:
         mov eax, 0x100000
         mov qword ptr [rax], rax
     1:  jmp 1b
-    .globl aeon_user_fault_end
-    aeon_user_fault_end:
+    .globl bedrock_user_fault_end
+    bedrock_user_fault_end:
 
-    .globl aeon_user_gp_start
-    aeon_user_gp_start:
+    .globl bedrock_user_gp_start
+    bedrock_user_gp_start:
         hlt
     1:  jmp 1b
-    .globl aeon_user_gp_end
-    aeon_user_gp_end:
+    .globl bedrock_user_gp_end
+    bedrock_user_gp_end:
 
-    .globl aeon_user_spin_start
-    aeon_user_spin_start:
+    .globl bedrock_user_spin_start
+    bedrock_user_spin_start:
     1:  jmp 1b
-    .globl aeon_user_spin_end
-    aeon_user_spin_end:
+    .globl bedrock_user_spin_end
+    bedrock_user_spin_end:
 
     // Bad requests must fail cleanly: an unknown call number must return -ENOSYS (-38) and a write from a
     // kernel address must return -EFAULT (-14). Exit code 0 only if both did.
-    .globl aeon_user_badcall_start
-    aeon_user_badcall_start:
+    .globl bedrock_user_badcall_start
+    bedrock_user_badcall_start:
         mov eax, 99
         syscall
         cmp rax, -38
@@ -238,13 +238,13 @@ global_asm!(
     5:  mov eax, 60
         syscall
     1:  jmp 1b
-    .globl aeon_user_badcall_end
-    aeon_user_badcall_end:
+    .globl bedrock_user_badcall_end
+    bedrock_user_badcall_end:
 
     // Calls `getpid`, which this program is not allowed to make. The kernel must refuse (-1); the program
     // exits with code 0 only if it did, and with 1 if the call was obeyed.
-    .globl aeon_user_denied_start
-    aeon_user_denied_start:
+    .globl bedrock_user_denied_start
+    bedrock_user_denied_start:
         mov eax, 39
         syscall
         add rax, 1
@@ -252,13 +252,13 @@ global_asm!(
         mov eax, 60
         syscall
     1:  jmp 1b
-    .globl aeon_user_denied_end
-    aeon_user_denied_end:
+    .globl bedrock_user_denied_end
+    bedrock_user_denied_end:
 
     // Linux-style userland program: dynamic memory (brk), file creation/write/read, stdout, clean exit.
     .p2align 4
-    .globl aeon_user_linux_start
-    aeon_user_linux_start:
+    .globl bedrock_user_linux_start
+    bedrock_user_linux_start:
         xor edi, edi
         mov eax, 12
         syscall
@@ -311,27 +311,27 @@ global_asm!(
     1:  jmp 1b
     2:  .asciz "/linux.txt"
     3:  .ascii "hello from linux userland\n"
-    .globl aeon_user_linux_end
-    aeon_user_linux_end:
+    .globl bedrock_user_linux_end
+    bedrock_user_linux_end:
     "#
 );
 
 unsafe extern "C" {
-    fn aeon_syscall_entry();
-    static aeon_user_hello_start: u8;
-    static aeon_user_hello_end: u8;
-    static aeon_user_fault_start: u8;
-    static aeon_user_fault_end: u8;
-    static aeon_user_gp_start: u8;
-    static aeon_user_gp_end: u8;
-    static aeon_user_spin_start: u8;
-    static aeon_user_spin_end: u8;
-    static aeon_user_badcall_start: u8;
-    static aeon_user_badcall_end: u8;
-    static aeon_user_denied_start: u8;
-    static aeon_user_denied_end: u8;
-    static aeon_user_linux_start: u8;
-    static aeon_user_linux_end: u8;
+    fn bedrock_syscall_entry();
+    static bedrock_user_hello_start: u8;
+    static bedrock_user_hello_end: u8;
+    static bedrock_user_fault_start: u8;
+    static bedrock_user_fault_end: u8;
+    static bedrock_user_gp_start: u8;
+    static bedrock_user_gp_end: u8;
+    static bedrock_user_spin_start: u8;
+    static bedrock_user_spin_end: u8;
+    static bedrock_user_badcall_start: u8;
+    static bedrock_user_badcall_end: u8;
+    static bedrock_user_denied_start: u8;
+    static bedrock_user_denied_end: u8;
+    static bedrock_user_linux_start: u8;
+    static bedrock_user_linux_end: u8;
 }
 
 /// The built-in programs `run` can start.
@@ -341,13 +341,13 @@ fn program(name: &str) -> Option<&'static [u8]> {
     // SAFETY: the symbols mark the start and end of byte ranges emitted by the global_asm! block above.
     unsafe {
         let (s, e) = match name {
-            "hello" => (&aeon_user_hello_start as *const u8, &aeon_user_hello_end as *const u8),
-            "fault" => (&aeon_user_fault_start as *const u8, &aeon_user_fault_end as *const u8),
-            "gp" => (&aeon_user_gp_start as *const u8, &aeon_user_gp_end as *const u8),
-            "spin" => (&aeon_user_spin_start as *const u8, &aeon_user_spin_end as *const u8),
-            "badcall" => (&aeon_user_badcall_start as *const u8, &aeon_user_badcall_end as *const u8),
-            "denied" => (&aeon_user_denied_start as *const u8, &aeon_user_denied_end as *const u8),
-            "linux" => (&aeon_user_linux_start as *const u8, &aeon_user_linux_end as *const u8),
+            "hello" => (&bedrock_user_hello_start as *const u8, &bedrock_user_hello_end as *const u8),
+            "fault" => (&bedrock_user_fault_start as *const u8, &bedrock_user_fault_end as *const u8),
+            "gp" => (&bedrock_user_gp_start as *const u8, &bedrock_user_gp_end as *const u8),
+            "spin" => (&bedrock_user_spin_start as *const u8, &bedrock_user_spin_end as *const u8),
+            "badcall" => (&bedrock_user_badcall_start as *const u8, &bedrock_user_badcall_end as *const u8),
+            "denied" => (&bedrock_user_denied_start as *const u8, &bedrock_user_denied_end as *const u8),
+            "linux" => (&bedrock_user_linux_start as *const u8, &bedrock_user_linux_end as *const u8),
             _ => return None,
         };
         Some(core::slice::from_raw_parts(s, e as usize - s as usize))
@@ -363,7 +363,7 @@ pub unsafe fn init() {
     unsafe {
         arch::wrmsr(arch::MSR_EFER, arch::rdmsr(arch::MSR_EFER) | EFER_SCE);
         arch::wrmsr(MSR_STAR, ((arch::SYSRET_BASE as u64) << 48) | ((arch::KERNEL_CS as u64) << 32));
-        arch::wrmsr(MSR_LSTAR, aeon_syscall_entry as *const () as u64);
+        arch::wrmsr(MSR_LSTAR, bedrock_syscall_entry as *const () as u64);
         arch::wrmsr(MSR_SFMASK, SFMASK);
     }
     READY.store(true, Ordering::Relaxed);
@@ -1450,7 +1450,7 @@ fn sys_kill(me: usize, pid: u64, _sig: u64) -> u64 {
 
 fn sys_uname(me: usize, buf: u64) -> u64 {
     let mut b = [0u8; 65 * 6];
-    let fields: [&str; 6] = ["BedrockOS", "aeon", crate::VERSION, "UEFI micro-OS", "x86_64", ""];
+    let fields: [&str; 6] = ["BedrockOS", "bedrock", crate::VERSION, "UEFI micro-OS", "x86_64", ""];
     for (i, f) in fields.iter().enumerate() {
         b[i * 65..i * 65 + f.len()].copy_from_slice(f.as_bytes());
     }
@@ -1579,7 +1579,7 @@ fn sys_clock_gettime(me: usize, clk: u64, out: u64) -> u64 {
 
 /// Rust side of the `syscall` entry. Runs with interrupts off on the task's kernel stack.
 #[unsafe(no_mangle)]
-extern "C" fn aeon_syscall_dispatch(f: &mut SysFrame) {
+extern "C" fn bedrock_syscall_dispatch(f: &mut SysFrame) {
     let Some(me) = current() else {
         f.rax = syscall::ERR;
         return;

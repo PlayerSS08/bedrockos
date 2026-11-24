@@ -9,9 +9,9 @@ pub const PCR_CMDLINE: u32 = 12;
 /// PCR that marks the boot phase BedrockOS reached (systemd uses PCR 11 for kernel and phase measurements).
 pub const PCR_PHASE: u32 = 11;
 /// The phase string measured just before BedrockOS leaves the firmware.
-pub const PHASE_EXIT_BOOT: &str = "aeon:exit-boot-services";
+pub const PHASE_EXIT_BOOT: &str = "bedrock:exit-boot-services";
 /// Measured instead of `PHASE_EXIT_BOOT` in recovery mode, so secrets sealed to a normal boot stay shut.
-pub const PHASE_RECOVERY: &str = "aeon:recovery";
+pub const PHASE_RECOVERY: &str = "bedrock:recovery";
 /// `EV_IPL`: initial program loader data (TCG PC Client platform firmware profile).
 pub const EV_IPL: u32 = 0x0000_000D;
 /// `EFI_TCG2_EVENT_HEADER.HeaderSize`: 4 + 2 + 4 + 4.

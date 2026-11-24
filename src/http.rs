@@ -52,7 +52,7 @@ pub fn parse_url(u: &str) -> Result<Url, HttpError> {
 pub fn request(url: &Url) -> Vec<u8> {
     let host = if url.port == 80 { url.host.clone() } else { alloc::format!("{}:{}", url.host, url.port) };
     alloc::format!(
-        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: aeon/{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
+        "GET {} HTTP/1.1\r\nHost: {}\r\nUser-Agent: bedrock/{}\r\nAccept: */*\r\nConnection: close\r\n\r\n",
         url.path,
         host,
         crate::VERSION

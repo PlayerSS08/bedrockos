@@ -4,7 +4,7 @@
 //!
 //! This is NOT Debian's apt: it does not read `.deb` files and cannot run Linux programs. It uses the same
 //! verbs because they are what people know. Honest limits: the filesystem is in RAM (up to 64 entries and
-//! 1 MiB unless changed), packages are copied to the AEON USB stick when one is writable, and there is no
+//! 1 MiB unless changed), packages are copied to the BEDROCK USB stick when one is writable, and there is no
 //! version solving (a package name is installed once, at the version the index lists).
 
 use alloc::format;
@@ -15,11 +15,11 @@ use crate::pkg::{self, Entry, Installed};
 use crate::ramfs::RamFs;
 
 pub const SOURCE_PATH: &str = "/etc/apt/source";
-pub const INDEX_PATH: &str = "/var/lib/aeonpkg/index";
-pub const SIG_PATH: &str = "/var/lib/aeonpkg/index.sig";
-pub const STATUS_PATH: &str = "/var/lib/aeonpkg/status";
+pub const INDEX_PATH: &str = "/var/lib/bedrockpkg/index";
+pub const SIG_PATH: &str = "/var/lib/bedrockpkg/index.sig";
+pub const STATUS_PATH: &str = "/var/lib/bedrockpkg/status";
 /// Highest index serial seen (also kept on the USB stick so it survives power off).
-pub const SERIAL_PATH: &str = "/var/lib/aeonpkg/serial";
+pub const SERIAL_PATH: &str = "/var/lib/bedrockpkg/serial";
 
 /// Largest index or package the downloader will keep.
 const MAX_INDEX: usize = 256 * 1024;

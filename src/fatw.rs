@@ -4,7 +4,7 @@
 //! step limits, and a damaged volume gives an error, never a panic or an endless loop.
 //!
 //! Safety rules, enforced here and not relaxed anywhere:
-//! - only a FAT32 volume whose boot-sector label is exactly `AEON` can be opened for writing;
+//! - only a FAT32 volume whose boot-sector label is exactly `BEDROCK` can be opened for writing;
 //! - nothing inside the `EFI` folder (the boot files) can be created, replaced, removed or entered for
 //!   writing; the `EFI` folder itself cannot be removed;
 //! - order of writes: new data first, directory entry second, old data freed last, so an interrupted
@@ -28,7 +28,7 @@ use crate::fatname;
 pub enum Reason {
     /// Not a FAT32 volume.
     NotFat32,
-    /// The volume label is not `AEON` (or the boot sector has no label field).
+    /// The volume label is not `BEDROCK` (or the boot sector has no label field).
     WrongLabel,
     /// The volume uses a single active FAT instead of mirroring both copies.
     NoMirroring,
@@ -158,7 +158,7 @@ pub struct Fat32Writer {
 }
 
 impl Fat32Writer {
-    /// Opens the volume whose boot sector is at `base`. Refuses anything but a FAT32 volume labelled `AEON`.
+    /// Opens the volume whose boot sector is at `base`. Refuses anything but a FAT32 volume labelled `BEDROCK`.
     pub fn open(dev: &mut dyn BlockWrite, base: u64) -> Result<Fat32Writer, WriteError> {
         // The read-only reader judges the layout first, so both agree on what a valid volume is.
         let vol = Volume::open(dev, base).map_err(|e| WriteError::NotWritable(Reason::Damaged(e)))?;
@@ -167,7 +167,7 @@ impl Fat32Writer {
         }
         let mut s = [0u8; SECTOR_SIZE];
         dev.read(base, &mut s)?;
-        if s[66] != 0x29 || s[71..82] != *b"AEON       " {
+        if s[66] != 0x29 || s[71..82] != *b"BEDROCK    " {
             return Err(WriteError::NotWritable(Reason::WrongLabel));
         }
         if s[40] & 0x80 != 0 {
@@ -206,7 +206,7 @@ impl Fat32Writer {
 
     /// Opens the volume the reader (`Volume::open_any`) would show: sector 0 if that is a FAT boot sector,
     /// otherwise the first MBR or GPT partition that holds a FAT volume. If that volume is not a writable
-    /// `AEON` FAT32 volume the answer is an error: the writer never moves on to a later partition, so what
+    /// `BEDROCK` FAT32 volume the answer is an error: the writer never moves on to a later partition, so what
     /// `ls` shows and where `write` puts data can never differ.
     pub fn open_any(dev: &mut dyn BlockWrite) -> Result<(Fat32Writer, u64), WriteError> {
         let first_err = match Volume::open(dev, 0) {

@@ -1,5 +1,5 @@
-/* Aeon programs: static, non-PIE, loaded at USER_BASE + 4 KiB (USER_BASE = 1 TiB). One segment per
-   permission set, each page-aligned (the large code model's .ltext/.lrodata/.ldata go with their kind), as Aeon's loader requires (no segment both writable and executable). */
+/* Bedrock programs: static, non-PIE, loaded at USER_BASE + 4 KiB (USER_BASE = 1 TiB). One segment per
+   permission set, each page-aligned (the large code model's .ltext/.lrodata/.ldata go with their kind), as Bedrock's loader requires (no segment both writable and executable). */
 ENTRY(_start)
 PHDRS {
     text   PT_LOAD FLAGS(5);

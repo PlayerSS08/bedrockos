@@ -243,7 +243,7 @@ fn gather_seed(bs: &BootServices, rt: &RuntimeServices, rdrand: bool) -> ([u8; e
     }
     // A seed left by the previous boot adds history, so a machine without RNG hardware still varies.
     let mut old = [0u8; entropy::SEED_LEN];
-    let persisted = read_var_bytes(rt, &SEED_NAME, &uefi::AEON_GUID, &mut old) == Some(entropy::SEED_LEN);
+    let persisted = read_var_bytes(rt, &SEED_NAME, &uefi::BEDROCK_GUID, &mut old) == Some(entropy::SEED_LEN);
     if persisted {
         pool.add(&old);
     }
@@ -254,12 +254,12 @@ fn gather_seed(bs: &BootServices, rt: &RuntimeServices, rdrand: bool) -> ([u8; e
     let seed = pool.finish();
     // The next boot's input is derived from this seed, never the seed itself.
     let mut next = entropy::Pool::new();
-    next.add(b"aeon-next-seed");
+    next.add(b"bedrock-next-seed");
     next.add(&seed);
     let mut next = next.finish();
     // An older build stored this variable with runtime access; attributes cannot change in place, so delete first.
-    let _ = (rt.set_variable)(SEED_NAME.as_ptr(), &uefi::AEON_GUID, 0, 0, core::ptr::null());
-    let _ = (rt.set_variable)(SEED_NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS, next.len(), next.as_ptr());
+    let _ = (rt.set_variable)(SEED_NAME.as_ptr(), &uefi::BEDROCK_GUID, 0, 0, core::ptr::null());
+    let _ = (rt.set_variable)(SEED_NAME.as_ptr(), &uefi::BEDROCK_GUID, uefi::VAR_NV_BS, next.len(), next.as_ptr());
     next.fill(0);
     core::hint::black_box(&next);
     (seed, strong, persisted)
@@ -439,7 +439,7 @@ fn verify_eventlog(bs: &BootServices) {
 /// security fix that old images must not be trusted without.
 const SBAT_TEXT: &str = concat!(
     "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\n",
-    "aeon,1,BedrockOS,aeon,",
+    "bedrock,1,BedrockOS,bedrock,",
     env!("CARGO_PKG_VERSION"),
     ",-\n\0"
 );
@@ -495,11 +495,11 @@ fn read_var_bytes(rt: &RuntimeServices, name: &[u16], guid: &Guid, buf: &mut [u8
     (s == uefi::SUCCESS).then_some(size.min(buf.len()))
 }
 
-const BOOT_COUNT_NAME: [u16; 14] = uefi::utf16(b"AeonBootCount\0");
-const SEED_NAME: [u16; 9] = uefi::utf16(b"AeonSeed\0");
+const BOOT_COUNT_NAME: [u16; 17] = uefi::utf16(b"BedrockBootCount\0");
+const SEED_NAME: [u16; 12] = uefi::utf16(b"BedrockSeed\0");
 
 fn write_boot_count(rt: &RuntimeServices, value: u8) -> Status {
-    (rt.set_variable)(BOOT_COUNT_NAME.as_ptr(), &uefi::AEON_GUID, uefi::VAR_NV_BS_RT, 1, &value)
+    (rt.set_variable)(BOOT_COUNT_NAME.as_ptr(), &uefi::BEDROCK_GUID, uefi::VAR_NV_BS_RT, 1, &value)
 }
 
 /// Image base/size and the command line (UEFI load options), copied into `BootInfo`.
@@ -1014,7 +1014,7 @@ pub extern "efiapi" fn efi_main(image: Handle, st_ptr: *mut SystemTable) -> Stat
     // row switch this boot to recovery mode (log on screen, menu waits, no timer or scheduler).
     {
         let mut buf = [0u8; 4];
-        let stored = read_var_bytes(rt, &BOOT_COUNT_NAME, &uefi::AEON_GUID, &mut buf);
+        let stored = read_var_bytes(rt, &BOOT_COUNT_NAME, &uefi::BEDROCK_GUID, &mut buf);
         let count = bootcount::decode(stored.map(|n| &buf[..n]));
         let d = bootcount::decide(count, opts.nocount);
         let mut counting = d.write.is_some();
@@ -1515,7 +1515,7 @@ extern "C" fn kernel_main() -> ! {
             let rt = unsafe { &*(b.runtime_services as *const RuntimeServices) };
             // The stored seed is boot-services-only: once the OS runs it must not be readable at all.
             let mut probe = [0u8; 32];
-            let hidden = read_var_bytes(rt, &SEED_NAME, &uefi::AEON_GUID, &mut probe).is_none();
+            let hidden = read_var_bytes(rt, &SEED_NAME, &uefi::BEDROCK_GUID, &mut probe).is_none();
             probe.fill(0);
             core::hint::black_box(&probe);
             info!("seed", "stored seed hidden from runtime access: {}", hidden);
@@ -1559,7 +1559,7 @@ static PANICKING: AtomicBool = AtomicBool::new(false);
 fn panic(info: &core::panic::PanicInfo) -> ! {
     arch::disable_interrupts();
     if PANICKING.swap(true, Ordering::SeqCst) {
-        log::raw_panic_line("[AEON] nested panic, halting\n");
+        log::raw_panic_line("[BEDROCK] nested panic, halting\n");
         arch::halt_forever();
     }
     // The panic may have happened inside the logger; release it and show every level.

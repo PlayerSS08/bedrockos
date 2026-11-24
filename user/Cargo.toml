@@ -1,8 +1,8 @@
 [package]
-name = "aeonrt"
+name = "bedrockrt"
 version = "0.11.0"
 edition = "2024"
-description = "Aeon user-space runtime and programs (no_std, static ELF, run by the Aeon kernel)"
+description = "Bedrock user-space runtime and programs (no_std, static ELF, run by the Bedrock kernel)"
 
 # Not part of the kernel's build: its own workspace and target.
 [workspace]

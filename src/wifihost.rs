@@ -7,7 +7,7 @@
 //!
 //! | BedrockOS sends | Helper answers |
 //! |---|---|
-//! | `HELLO` | `AEONWIFI 1` |
+//! | `HELLO` | `BEDROCKWIFI 1` |
 //! | `SCAN` | zero or more `NET <signal 0-100> <secure 0/1> <current 0/1> <ssid>` lines, then `END` (or `ERR <text>`) |
 //! | `CONNECT <ssid> <password>` | `OK <text>` or `ERR <text>` |
 //!
@@ -273,7 +273,7 @@ pub mod link {
         }
         drain();
         let mut buf = [0u8; 32];
-        send(&[b"HELLO"]) && matches!(read_line(&mut buf, deadline(1500)), Some(n) if buf[..n].starts_with(b"AEONWIFI"))
+        send(&[b"HELLO"]) && matches!(read_line(&mut buf, deadline(1500)), Some(n) if buf[..n].starts_with(b"BEDROCKWIFI"))
     }
 
     /// Asks the host to scan. Fills `out` with up to `MAX_NETS` networks, strongest first as the host sends them.

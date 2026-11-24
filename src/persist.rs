@@ -1,7 +1,7 @@
 //! Saving the RAM filesystem to the USB stick and bringing it back at the next boot. Pure and host-tested.
 //!
 //! BedrockOS keeps files in memory, so without this everything typed into a file is gone at power-off. The whole
-//! tree is written as one file (`AEONFS.BIN`) on the AEON volume: a header, one record per folder or file, and
+//! tree is written as one file (`BEDROCK.BIN`) on the BEDROCK volume: a header, one record per folder or file, and
 //! a SHA-256 of everything before it. Reading it back treats the file as hostile (it came from a removable
 //! stick): sizes are capped, paths are checked, and a wrong checksum means nothing is restored at all.
 
@@ -10,7 +10,7 @@ use alloc::vec::Vec;
 
 use crate::sha256;
 
-pub const MAGIC: &[u8; 8] = b"AEONFS1\0";
+pub const MAGIC: &[u8; 8] = b"BRCKFS1\0";
 /// A tree bigger than this is not saved (the RAM filesystem itself is smaller than this).
 pub const MAX_TOTAL: usize = 8 * 1024 * 1024;
 const MAX_ENTRIES: usize = 4096;
@@ -243,7 +243,7 @@ mod tests {
         for p in ["/home/a.txt", "/note.txt", "/tmp/x", "/home", "/usrdata/x", "/etcetera", "/binary", "/variable/x"] {
             assert!(is_user_path(p), "{p}");
         }
-        for p in ["/etc", "/etc/hostname", "/usr/share/greet/README", "/var/lib/aeonpkg/status", "/var", "/bin/tool", "/usb/AEONFS.BIN"] {
+        for p in ["/etc", "/etc/hostname", "/usr/share/greet/README", "/var/lib/bedrockpkg/status", "/var", "/bin/tool", "/usb/BEDROCK.BIN"] {
             assert!(!is_user_path(p), "{p}");
         }
     }

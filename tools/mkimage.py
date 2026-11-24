@@ -3,7 +3,7 @@
   1. an EFI System Partition (FAT32) holding a copy of a directory tree (normally out/usb), and
   2. an empty FAT32 data partition labelled BRDATA (notes, tasks, config live here).
 
-Pure Python, no third-party modules. Adapted from Aeon's vmbox/build_disks.py, generalised to any tree.
+Pure Python, no third-party modules. Adapted from Bedrock's vmbox/build_disks.py, generalised to any tree.
 
     python tools/mkimage.py <tree-dir> <out.img> [--esp-mb 64] [--data-mb 128]
 """
@@ -230,8 +230,8 @@ def build(tree, out, esp_mb, data_mb):
     data_start = esp_start + esp_len
     data_len = data_mb * mb
     total = data_start + data_len + 2048  # room for the backup GPT
-    # Labelled AEON: the OS saves your files (notes, tasks, ...) only on a FAT32 volume with this label.
-    esp = Fat32(esp_len, "AEON")
+    # Labelled BEDROCK: the OS saves your files (notes, tasks, ...) only on a FAT32 volume with this label.
+    esp = Fat32(esp_len, "BEDROCK")
     esp.add_tree(tree, 2, 2)
     esp_img = esp.finish(0x20261123)
     data = Fat32(data_len, "BRDATA")

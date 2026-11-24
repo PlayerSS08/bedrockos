@@ -1,6 +1,6 @@
 //! Ed25519 signature verification (RFC 8032), pure and host-testable. Verification only: the kernel checks
-//! that a package index was signed by the Aeon repository key; signing happens on the maintainer's PC
-//! (`tools/aeon_repo.py`).
+//! that a package index was signed by the Bedrock repository key; signing happens on the maintainer's PC
+//! (`tools/bedrock_repo.py`).
 //!
 //! Field elements are four 64-bit limbs modulo 2^255 - 19, kept "weakly reduced" (below 2^256) and made
 //! canonical only when compared or encoded. The code is written for clarity, not speed or constant time:
@@ -349,9 +349,9 @@ mod tests {
             "92a009a9f0d4cab8720e820b5f642540a2b27b5416503f8fb3762223ebdb69da085ac1e43e15996e458f3613d0f11d8c387b2eaeb4302aeeb00d291612bb0c00",
         ),
         (
-            "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8",
+            "193b60cb9dedf4608e1417283ccd393514d3eb039fbbe3b29bfb584be68ddecf",
             "",
-            "04292ed381456dbaf4f047645f37bcc9b2c93898f4345db1a1da344c6095a1f01c6bbbd2ac860d99bfbee50a0afaf91e5ef60d56e92b4f9d2dca94a90b64520f",
+            "67140cef6fd85ef3d03c11614acaca26f4c86e38fdab27fab6d568aa81a6fac8df0c67e63f6b1bc7b112caa17bd8ced822d1a2565322b5bd6aca719b09aa4706",
         ),
     ];
 
@@ -359,7 +359,7 @@ mod tests {
         match i {
             0 => alloc::vec![],
             1 => alloc::vec![0x72],
-            _ => b"Aeon package index test".repeat(20),
+            _ => b"Bedrock package index test".repeat(20),
         }
     }
 

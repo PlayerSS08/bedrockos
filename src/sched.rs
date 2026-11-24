@@ -1,7 +1,7 @@
 //! Preemptive round-robin scheduler for kernel threads.
 //!
 //! A task's whole CPU context lives on its own kernel stack. The timer (and the voluntary-yield
-//! interrupt) pushes registers, calls [`aeon_sched_irq`] with the resulting stack pointer, and resumes
+//! interrupt) pushes registers, calls [`bedrock_sched_irq`] with the resulting stack pointer, and resumes
 //! whichever stack pointer it returns (see the stubs in `arch`). Task 0 is the boot thread and doubles
 //! as the idle task: it only runs when nothing else is ready.
 
@@ -230,7 +230,7 @@ fn create(name: &str, rip: u64, arg: usize, user: Option<&UserStart>) -> Option<
 /// Called by the interrupt stubs with the interrupted context's stack pointer; returns the stack
 /// pointer to resume. Runs with interrupts disabled.
 #[unsafe(no_mangle)]
-extern "C" fn aeon_sched_irq(sp: u64, timer: u64) -> u64 {
+extern "C" fn bedrock_sched_irq(sp: u64, timer: u64) -> u64 {
     if timer != 0 {
         arch::timer_tick();
     }

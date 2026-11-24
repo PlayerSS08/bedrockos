@@ -21,7 +21,7 @@ impl Default for Pool {
 impl Pool {
     pub fn new() -> Self {
         let mut h = Sha256::new();
-        h.update(b"aeon-boot-seed-v1");
+        h.update(b"bedrock-boot-seed-v1");
         Self { h, inputs: 0 }
     }
 
@@ -61,7 +61,7 @@ impl Drbg {
     pub fn fill(&mut self, out: &mut [u8]) {
         for chunk in out.chunks_mut(DIGEST_LEN) {
             let mut h = Sha256::new();
-            h.update(b"aeon-drbg-v1");
+            h.update(b"bedrock-drbg-v1");
             h.update(&self.key);
             h.update(&self.counter.to_le_bytes());
             self.counter = self.counter.wrapping_add(1);

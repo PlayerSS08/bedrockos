@@ -1,7 +1,7 @@
 //! USB filesystem adapter connecting the shell to the pendrive via [`crate::fat`] and [`crate::fatw`].
 //!
 //! Pure, host-testable core logic with safety rules:
-//! - Only a volume labelled `AEON` is writable (non-AEON labels are strictly read-only);
+//! - Only a volume labelled `BEDROCK` is writable (non-BEDROCK labels are strictly read-only);
 //! - Files inside `EFI/` and the `EFI/` directory itself cannot be written or removed;
 //! - Paths under `/usb` map to the FAT32 volume's root.
 
@@ -123,7 +123,7 @@ pub fn remove_dir(dev: &mut dyn BlockWrite, rel: &str) -> Result<(), &'static st
 
 fn map_write_err(e: WriteError) -> &'static str {
     match e {
-        WriteError::NotWritable(Reason::WrongLabel) => "volume label is not AEON (read only)",
+        WriteError::NotWritable(Reason::WrongLabel) => "volume label is not BEDROCK (read only)",
         WriteError::NotWritable(Reason::NotFat32) => "not a FAT32 volume",
         WriteError::NotWritable(Reason::NoMirroring) => "volume mirroring disabled",
         WriteError::NotWritable(Reason::Damaged(_)) => "damaged volume",
@@ -191,8 +191,8 @@ mod tests {
     use super::*;
     use crate::block::{MemDiskMut, SECTOR_SIZE};
 
-    const AEON: [u8; 11] = *b"AEON       ";
-    const OTHER: [u8; 11] = *b"NOAEON     ";
+    const BEDROCK: [u8; 11] = *b"BEDROCK    ";
+    const OTHER: [u8; 11] = *b"NOBEDROCK  ";
     const RESERVED: usize = 4;
 
     fn make_test_vol(label: [u8; 11]) -> Vec<u8> {
@@ -203,7 +203,7 @@ mod tests {
         let mut img = alloc::vec![0u8; total * SECTOR_SIZE];
         let mut put = |o: usize, v: &[u8]| img[o..o + v.len()].copy_from_slice(v);
         put(0, &[0xEB, 0x58, 0x90]);
-        put(3, b"AEONTEST");
+        put(3, b"BEDROCK1");
         put(11, &512u16.to_le_bytes());
         put(13, &[spc as u8]);
         put(14, &(RESERVED as u16).to_le_bytes());
@@ -233,8 +233,8 @@ mod tests {
     }
 
     /// A 2 TB GPT disk laid out like the Seagate Portable in the OMEN test: a 16 MB reserved partition, a huge
-    /// NTFS partition with the owner's data, and the 100 GB AEON FAT32 volume far up the disk (sector 3.7 billion,
-    /// still inside the 32-bit sector numbers that READ(10)/WRITE(10) can address). Only the AEON volume has
+    /// NTFS partition with the owner's data, and the 100 GB BEDROCK FAT32 volume far up the disk (sector 3.7 billion,
+    /// still inside the 32-bit sector numbers that READ(10)/WRITE(10) can address). Only the BEDROCK volume has
     /// storage behind it; every write anywhere else is recorded so the test can insist there are none.
     struct SeagateLike {
         vol: Vec<u8>,
@@ -243,7 +243,7 @@ mod tests {
 
     const SEAGATE_SECTORS: u64 = 3_907_029_168;
     const NTFS_START: u64 = 32_768;
-    const AEON_START: u64 = 3_697_315_840;
+    const BEDROCK_START: u64 = 3_697_315_840;
 
     impl SeagateLike {
         fn vol_sectors(&self) -> u64 {
@@ -262,8 +262,8 @@ mod tests {
                 out[80..84].copy_from_slice(&128u32.to_le_bytes());
                 out[84..88].copy_from_slice(&128u32.to_le_bytes());
             } else if s == 2 {
-                // Windows' layout: reserved (MSR), then NTFS data, then AEON. Entries are 128 bytes each.
-                for (i, (first, last)) in [(34u64, 32_767u64), (NTFS_START, AEON_START - 1), (AEON_START, AEON_START + self.vol_sectors() - 1)].iter().enumerate() {
+                // Windows' layout: reserved (MSR), then NTFS data, then BEDROCK. Entries are 128 bytes each.
+                for (i, (first, last)) in [(34u64, 32_767u64), (NTFS_START, BEDROCK_START - 1), (BEDROCK_START, BEDROCK_START + self.vol_sectors() - 1)].iter().enumerate() {
                     let e = &mut out[i * 128..(i + 1) * 128];
                     e[..16].copy_from_slice(&[0xA2, 0xA0, 0xD0, 0xEB, 0xE5, 0xB9, 0x33, 0x44, 0x87, 0xC0, 0x68, 0xB6, 0xB7, 0x26, 0x99, 0xC7]);
                     e[16..32].copy_from_slice(&[i as u8 + 1; 16]);
@@ -274,8 +274,8 @@ mod tests {
                 out[3..11].copy_from_slice(b"NTFS    ");
                 out[510] = 0x55;
                 out[511] = 0xAA;
-            } else if (AEON_START..AEON_START + self.vol_sectors()).contains(&s) {
-                let o = (s - AEON_START) as usize * SECTOR_SIZE;
+            } else if (BEDROCK_START..BEDROCK_START + self.vol_sectors()).contains(&s) {
+                let o = (s - BEDROCK_START) as usize * SECTOR_SIZE;
                 out.copy_from_slice(&self.vol[o..o + SECTOR_SIZE]);
             }
         }
@@ -297,8 +297,8 @@ mod tests {
         fn write(&mut self, lba: u64, buf: &[u8]) -> Result<(), crate::block::BlockError> {
             for (i, chunk) in buf.chunks(SECTOR_SIZE).enumerate() {
                 let s = lba + i as u64;
-                if (AEON_START..AEON_START + self.vol_sectors()).contains(&s) {
-                    let o = (s - AEON_START) as usize * SECTOR_SIZE;
+                if (BEDROCK_START..BEDROCK_START + self.vol_sectors()).contains(&s) {
+                    let o = (s - BEDROCK_START) as usize * SECTOR_SIZE;
                     self.vol[o..o + SECTOR_SIZE].copy_from_slice(chunk);
                 } else {
                     self.writes_outside.push(s);
@@ -309,15 +309,15 @@ mod tests {
     }
 
     #[test]
-    fn the_report_goes_to_the_aeon_partition_of_a_big_gpt_disk_and_nowhere_else() {
-        let mut dev = SeagateLike { vol: make_test_vol(AEON), writes_outside: Vec::new() };
+    fn the_report_goes_to_the_bedrock_partition_of_a_big_gpt_disk_and_nowhere_else() {
+        let mut dev = SeagateLike { vol: make_test_vol(BEDROCK), writes_outside: Vec::new() };
         let text = b"BedrockOS report: the boot log, the PCI list and the network registers".repeat(40);
         write_file(&mut dev, "REPORT.TXT", &text, true).unwrap();
         assert_eq!(read_file(&mut dev, "REPORT.TXT", 1 << 20).unwrap(), text);
         // Replacing it with a second report works too (the stick is used again and again).
         write_file(&mut dev, "REPORT.TXT", b"second", true).unwrap();
         assert_eq!(read_file(&mut dev, "REPORT.TXT", 1 << 20).unwrap(), b"second");
-        assert!(dev.writes_outside.is_empty(), "wrote outside the AEON partition: {:?}", dev.writes_outside);
+        assert!(dev.writes_outside.is_empty(), "wrote outside the BEDROCK partition: {:?}", dev.writes_outside);
     }
 
     #[test]
@@ -351,7 +351,7 @@ mod tests {
     }
 
     #[test]
-    fn non_aeon_label_refuses_write_but_allows_read() {
+    fn non_bedrock_label_refuses_write_but_allows_read() {
         let mut storage = make_test_vol(OTHER);
         let mut dev = MemDiskMut(&mut storage);
 
@@ -359,12 +359,12 @@ mod tests {
         assert!(list_dir(&mut dev, "", |_| {}).is_ok());
 
         // Write is refused due to wrong label
-        assert_eq!(write_file(&mut dev, "test.txt", b"hello", false), Err("volume label is not AEON (read only)"));
+        assert_eq!(write_file(&mut dev, "test.txt", b"hello", false), Err("volume label is not BEDROCK (read only)"));
     }
 
     #[test]
-    fn write_and_read_roundtrip_on_aeon_volume() {
-        let mut storage = make_test_vol(AEON);
+    fn write_and_read_roundtrip_on_bedrock_volume() {
+        let mut storage = make_test_vol(BEDROCK);
         let mut dev = MemDiskMut(&mut storage);
 
         write_file(&mut dev, "note.txt", b"hello pendrive", false).unwrap();

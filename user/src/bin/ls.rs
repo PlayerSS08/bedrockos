@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
-use aeonrt::{close, entry, eprint, getdents, open, print, write_all, DT_DIR, O_DIRECTORY, O_RDONLY};
+use bedrockrt::{close, entry, eprint, getdents, open, print, write_all, DT_DIR, O_DIRECTORY, O_RDONLY};
 
-fn main(args: aeonrt::Args) -> i32 {
+fn main(args: bedrockrt::Args) -> i32 {
     let name = args.get(1).unwrap_or(b".");
     let mut path = [0u8; 129];
     if name.len() > 128 {

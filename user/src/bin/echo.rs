@@ -1,8 +1,8 @@
 #![no_std]
 #![no_main]
-use aeonrt::{entry, write_all};
+use bedrockrt::{entry, write_all};
 
-fn main(args: aeonrt::Args) -> i32 {
+fn main(args: bedrockrt::Args) -> i32 {
     for i in 1..args.len() {
         if i > 1 {
             write_all(1, b" ");

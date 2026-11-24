@@ -395,14 +395,14 @@ mod tests {
     }
 
     fn pmk() -> [u8; 32] {
-        derive_pmk("Aeon-pass-1234", b"AeonNet").unwrap()
+        derive_pmk("Bedrock-pass-1234", b"BedrockNet").unwrap()
     }
 
     #[test]
     fn pmk_and_ptk_match_the_python_reference() {
-        assert_eq!(pmk().to_vec(), unhex("3459978fb1ed86abb3498609d3d09d94abd5674920e8130afff23254aab5f2f3"));
+        assert_eq!(pmk().to_vec(), unhex("43865e369a86099bf67eaf9256ffe7b937683fb9c1fbe4fd35ff157e0e1b0e79"));
         let ptk = derive_ptk(&pmk(), &AA, &SPA, &nonce(3, 1), &nonce(7, 5));
-        let want = unhex("c03d75dec292c502ceea235b08ca4a554d1ab1d69780b91fbfc4ab04577fd129ad5315a74917f832c628090852b6c05b");
+        let want = unhex("e13737e3c20922453bcf21777d0f8bf88f0a2e02a407ebe61ab59adc6eed35fb9a3600ed7ef11eb3aa2e8e43e452a7b1");
         assert_eq!(ptk.kck.to_vec(), want[..16]);
         assert_eq!(ptk.kek.to_vec(), want[16..32]);
         assert_eq!(ptk.tk.to_vec(), want[32..48]);
@@ -473,7 +473,7 @@ mod tests {
         let (mut sup, ap) = setup();
         let m2 = sup.handle(&ap.msg1(1)).unwrap().unwrap();
         let want = unhex(
-            "0103007502010a00000000000000000001050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7de0000000000000000000000000000000000000000000000000000000000000000bfd76f212416abd54df35fe007c27a2e001630140100000fac040100000fac040100000fac020000",
+            "0103007502010a00000000000000000001050c131a21282f363d444b525960676e757c838a91989fa6adb4bbc2c9d0d7de00000000000000000000000000000000000000000000000000000000000000008c599f6f76ae82ad82e3e16da6f41c84001630140100000fac040100000fac040100000fac020000",
         );
         assert_eq!(m2, want);
         assert_eq!(sup.state(), State::WaitMsg3);
@@ -505,7 +505,7 @@ mod tests {
         let m2 = sup.handle(&ap.msg1(1)).unwrap().unwrap();
         let parsed = EapolKey::parse(&m2).unwrap();
         // An AP that knows a different passphrase derives a different PTK.
-        let other = derive_pmk("Other-pass-9999", b"AeonNet").unwrap();
+        let other = derive_pmk("Other-pass-9999", b"BedrockNet").unwrap();
         ap.ptk = Some(derive_ptk(&other, &AA, &SPA, &ap.anonce, &parsed.nonce));
         assert_eq!(sup.handle(&ap.msg3(2, None)), Err(WpaError::BadMic));
         assert_ne!(sup.state(), State::Done);

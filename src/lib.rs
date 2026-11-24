@@ -162,8 +162,8 @@ pub mod xhci;
 pub mod touchpad_hw;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-/// Set `AEON_GIT_HASH` in the build environment to embed a revision in the boot banner.
-pub const GIT_HASH: &str = match option_env!("AEON_GIT_HASH") {
+/// Set `BEDROCK_GIT_HASH` in the build environment to embed a revision in the boot banner.
+pub const GIT_HASH: &str = match option_env!("BEDROCK_GIT_HASH") {
     Some(h) => h,
     None => "unknown",
 };

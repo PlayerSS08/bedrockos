@@ -6,7 +6,7 @@ use crate::block::{BlockDev, BlockWrite, MemDisk, MemDiskMut, SECTOR_SIZE};
 use crate::fat::Volume;
 use std::collections::{BTreeMap, BTreeSet};
 
-const AEON: [u8; 11] = *b"AEON       ";
+const BEDROCK: [u8; 11] = *b"BEDROCK    ";
 const RESERVED: usize = 4;
 
 /// A FAT32 volume in memory: boot sector, FSInfo, two FATs and an empty root folder in cluster 2.
@@ -16,7 +16,7 @@ fn mkimg(label: [u8; 11], clusters: u32, spc: u32) -> Vec<u8> {
     let mut img = vec![0u8; total * SECTOR_SIZE];
     let mut put = |o: usize, v: &[u8]| img[o..o + v.len()].copy_from_slice(v);
     put(0, &[0xEB, 0x58, 0x90]);
-    put(3, b"AEONTEST");
+    put(3, b"BEDROCK1");
     put(11, &512u16.to_le_bytes());
     put(13, &[spc as u8]);
     put(14, &(RESERVED as u16).to_le_bytes());
@@ -74,8 +74,8 @@ struct Rig {
 
 impl Rig {
     fn new(clusters: u32, spc: u32) -> Rig {
-        let mut img = mkimg(AEON, clusters, spc);
-        let w = Fat32Writer::open(&mut MemDiskMut(&mut img), 0).expect("a fresh AEON volume opens");
+        let mut img = mkimg(BEDROCK, clusters, spc);
+        let w = Fat32Writer::open(&mut MemDiskMut(&mut img), 0).expect("a fresh BEDROCK volume opens");
         Rig { img, w }
     }
 
@@ -181,14 +181,14 @@ fn check_with(img: &[u8], w: &Fat32Writer, mirrored: bool) -> Result<usize, Stri
 // ---------------------------------------------------------------- opening and refusing
 
 #[test]
-fn a_volume_labelled_aeon_opens() {
-    let mut img = mkimg(AEON, 100, 1);
+fn a_volume_labelled_bedrock_opens() {
+    let mut img = mkimg(BEDROCK, 100, 1);
     assert!(Fat32Writer::open(&mut MemDiskMut(&mut img), 0).is_ok());
 }
 
 #[test]
 fn any_other_label_is_refused() {
-    for label in [*b"NO NAME    ", *b"aeon       ", *b"AEON2      ", *b"AEO        ", *b"           ", *b"AEON      X"] {
+    for label in [*b"NO NAME    ", *b"bedrock    ", *b"BEDROCK2   ", *b"BEDROC     ", *b"           ", *b"BEDROCK   X"] {
         let mut img = mkimg(label, 100, 1);
         assert_eq!(Fat32Writer::open(&mut MemDiskMut(&mut img), 0).err(), Some(WriteError::NotWritable(Reason::WrongLabel)), "{:?}", String::from_utf8_lossy(&label));
     }
@@ -196,14 +196,14 @@ fn any_other_label_is_refused() {
 
 #[test]
 fn a_boot_sector_without_the_extended_signature_is_refused() {
-    let mut img = mkimg(AEON, 100, 1);
+    let mut img = mkimg(BEDROCK, 100, 1);
     img[66] = 0;
     assert!(matches!(Fat32Writer::open(&mut MemDiskMut(&mut img), 0), Err(WriteError::NotWritable(_))));
 }
 
 #[test]
 fn a_single_active_fat_is_refused() {
-    let mut img = mkimg(AEON, 100, 1);
+    let mut img = mkimg(BEDROCK, 100, 1);
     img[40] |= 0x80;
     assert_eq!(Fat32Writer::open(&mut MemDiskMut(&mut img), 0).err(), Some(WriteError::NotWritable(Reason::NoMirroring)));
 }
@@ -212,7 +212,7 @@ fn a_single_active_fat_is_refused() {
 fn garbage_and_non_fat32_are_refused() {
     let mut zeros = vec![0u8; 100 * 512];
     assert!(matches!(Fat32Writer::open(&mut MemDiskMut(&mut zeros), 0), Err(WriteError::NotWritable(_))));
-    let mut img = mkimg(AEON, 100, 1);
+    let mut img = mkimg(BEDROCK, 100, 1);
     // Make it look like FAT16: root entries and a 16-bit FAT size.
     img[17] = 0;
     img[18] = 2;
@@ -224,7 +224,7 @@ fn garbage_and_non_fat32_are_refused() {
 
 #[test]
 fn opening_writes_nothing() {
-    let mut img = mkimg(AEON, 100, 1);
+    let mut img = mkimg(BEDROCK, 100, 1);
     let before = img.clone();
     Fat32Writer::open(&mut MemDiskMut(&mut img), 0).unwrap();
     assert_eq!(img, before);
@@ -601,7 +601,7 @@ impl BlockWrite for Spy<'_> {
 
 #[test]
 fn the_boot_sector_and_reserved_area_are_never_written() {
-    let mut img = mkimg(AEON, 200, 1);
+    let mut img = mkimg(BEDROCK, 200, 1);
     let mut w = Fat32Writer::open(&mut MemDiskMut(&mut img), 0).unwrap();
     let fs = fat_sectors_of(&img) as u64;
     let mut spy = Spy { inner: MemDiskMut(&mut img), written: BTreeSet::new(), count: 0, fail_at: None };
@@ -634,7 +634,7 @@ fn the_clean_flag_is_set_after_success_and_after_a_clean_refusal() {
 
 #[test]
 fn the_clean_flag_stays_cleared_if_the_disk_fails_midway() {
-    let mut img = mkimg(AEON, 100, 1);
+    let mut img = mkimg(BEDROCK, 100, 1);
     let mut w = Fat32Writer::open(&mut MemDiskMut(&mut img), 0).unwrap();
     // Write number 0 is the "dirty" mark; fail the second write.
     let mut spy = Spy { inner: MemDiskMut(&mut img), written: BTreeSet::new(), count: 0, fail_at: Some(1) };
@@ -894,7 +894,7 @@ fn a_failure_at_any_write_never_corrupts_the_volume() {
         }
         w.remove_dir(d, "dir")
     }
-    let base = mkimg(AEON, 80, 1);
+    let base = mkimg(BEDROCK, 80, 1);
     // First a clean run to count the writes.
     let total = {
         let mut img = base.clone();
@@ -934,7 +934,7 @@ fn scenarios_on_real_mkfs_images() {
         let Some(tag) = name.strip_prefix("base-").and_then(|n| n.strip_suffix(".img")) else { continue };
         found += 1;
         let mut img = std::fs::read(&path).unwrap();
-        let mut w = Fat32Writer::open(&mut MemDiskMut(&mut img), 0).expect("mkfs.fat -n AEON gives a writable volume");
+        let mut w = Fat32Writer::open(&mut MemDiskMut(&mut img), 0).expect("mkfs.fat -n BEDROCK gives a writable volume");
         let mut want: BTreeMap<String, Option<Vec<u8>>> = BTreeMap::new();
         {
             let mut d = MemDiskMut(&mut img);
@@ -1002,7 +1002,7 @@ fn a_name_equal_to_another_files_short_alias_counts_as_existing() {
 
 #[test]
 fn open_any_finds_volume_at_root_or_in_mbr() {
-    let vol = mkimg(AEON, 100, 1);
+    let vol = mkimg(BEDROCK, 100, 1);
     let mut d = MemDiskMut(&mut vol.clone());
     let (w, base) = Fat32Writer::open_any(&mut d).unwrap();
     assert_eq!(base, 0);
@@ -1053,10 +1053,10 @@ fn two_partitions(a: [u8; 11], b: [u8; 11]) -> (Vec<u8>, u64, u64) {
 }
 
 #[test]
-fn the_writer_uses_the_same_partition_as_the_reader_never_a_later_aeon_one() {
-    // First partition is someone else's (read only), second is labelled AEON. The reader (`ls /usb`) shows the
+fn the_writer_uses_the_same_partition_as_the_reader_never_a_later_bedrock_one() {
+    // First partition is someone else's (read only), second is labelled BEDROCK. The reader (`ls /usb`) shows the
     // first one, so a write must not silently go to the second one: it must be refused.
-    let (mut disk, _, start_b) = two_partitions(*b"OTHER      ", AEON);
+    let (mut disk, _, start_b) = two_partitions(*b"OTHER      ", BEDROCK);
     let before = disk.clone();
     assert_eq!(Fat32Writer::open_any(&mut MemDiskMut(&mut disk)).err(), Some(WriteError::NotWritable(Reason::WrongLabel)));
     assert_eq!(disk, before);
@@ -1064,8 +1064,8 @@ fn the_writer_uses_the_same_partition_as_the_reader_never_a_later_aeon_one() {
 }
 
 #[test]
-fn with_an_aeon_first_partition_that_one_is_used() {
-    let (mut disk, start_a, _) = two_partitions(AEON, *b"OTHER      ");
+fn with_an_bedrock_first_partition_that_one_is_used() {
+    let (mut disk, start_a, _) = two_partitions(BEDROCK, *b"OTHER      ");
     let (_, base) = Fat32Writer::open_any(&mut MemDiskMut(&mut disk)).unwrap();
     assert_eq!(base, start_a);
 }
@@ -1073,7 +1073,7 @@ fn with_an_aeon_first_partition_that_one_is_used() {
 #[test]
 fn a_partition_the_reader_cannot_open_is_skipped_by_both() {
     // First partition is not a FAT volume at all; both reader and writer move on to the second.
-    let (mut disk, start_a, start_b) = two_partitions(AEON, AEON);
+    let (mut disk, start_a, start_b) = two_partitions(BEDROCK, BEDROCK);
     disk[start_a as usize * SECTOR_SIZE + 510] = 0; // break the first boot sector signature
     let (_, base) = Fat32Writer::open_any(&mut MemDiskMut(&mut disk)).unwrap();
     assert_eq!(base, start_b);

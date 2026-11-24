@@ -1,6 +1,6 @@
 //! The text-handling parts of the shell commands `head`, `tail`, `wc`, `grep`, `seq` and `hexdump`, plus the
 //! argument splitter they share. Pure logic over byte slices, host-tested; the shell only reads files and
-//! prints what these return. Aeon has no pipes, so every command takes file names.
+//! prints what these return. Bedrock has no pipes, so every command takes file names.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -241,8 +241,8 @@ mod tests {
 
     #[test]
     fn hexdump_lines_look_like_xxd() {
-        let l = hexdump_line(0, b"Hello, Aeon!\n\x00\x01\x02");
-        assert_eq!(l, "00000000  48 65 6c 6c 6f 2c 20 41  65 6f 6e 21 0a 00 01 02  |Hello, Aeon!....|");
+        let l = hexdump_line(0, b"Hi, Bedrock!\n\x00\x01\x02");
+        assert_eq!(l, "00000000  48 69 2c 20 42 65 64 72  6f 63 6b 21 0a 00 01 02  |Hi, Bedrock!....|");
         let short = hexdump_line(0x10, b"ab");
         assert_eq!(short, "00000010  61 62                                             |ab|");
         assert_eq!(short.len(), l.len() - 14, "the text column is not padded for a short line");

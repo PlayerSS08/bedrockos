@@ -3,7 +3,7 @@ name = "bedrockos"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.86"
-description = "BedrockOS: a small x86_64 UEFI micro-OS with a graphical desktop (based on Aeon 0.11.0)"
+description = "BedrockOS: a small x86_64 UEFI micro-OS with a graphical desktop (written in Rust)"
 
 [workspace]
 members = [".", "xtask"]
