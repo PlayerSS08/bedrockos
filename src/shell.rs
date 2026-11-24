@@ -51,7 +51,7 @@ macro_rules! out {
 }
 
 /// The RAM filesystem. Touched by the shell task and by syscall file handlers (single CPU, interrupts off).
-static FS: Global<RamFs> = Global::new(RamFs::new(64, 1 << 20));
+static FS: Global<RamFs> = Global::new(RamFs::new(256, 1 << 20));
 
 pub(crate) fn fs() -> &'static mut RamFs {
     // SAFETY: called only by shell or syscall handlers when interrupts are off; no concurrent reference exists.
@@ -1379,10 +1379,141 @@ impl crate::apt::Fetcher for UsbFetcher {
 
 const APT_HELP: &str = "apt: signed packages over plain HTTP (not Debian's apt: no .deb, no Linux programs)\n  apt source <http://host[:port]/path/>   set the repository (needs a PC running tools/aeon_repo.py serve)\n  apt update                              download and verify the package list\n  apt list [--installed] | search <text> | show <pkg> | files <pkg>\n  apt install <pkg>...                    install with dependencies (SHA-256 + signature checked)\n  apt reinstall <pkg>...                  reinstall already installed packages\n  apt upgrade                             upgrade installed packages to newest version\n  apt full-upgrade                        upgrade packages, removing obsolete dependencies if needed\n  apt remove <pkg>... | autoremove\n  apt restore                             reinstall what was saved on the AEON stick (works offline)\n";
 
+const SNAP_HELP: &str = "snap: the Bedrock Snap Store (built in, works offline)\n  snap list                 installed apps (also: ls /snap)\n  snap find [text]          apps in the store\n  snap info <app>           details of an app\n  snap install <app>...     install apps\n  snap remove <app>...      remove apps\n  snap refresh              update installed apps\n  snap run <app> [args]     start an app (installed command apps also run by name, e.g. `cowsay hi`)\n";
+
+fn cmd_snap(rest: &str) {
+    let mut parts = rest.split_whitespace();
+    let sub = parts.next().unwrap_or("help");
+    let args: alloc::vec::Vec<&str> = parts.filter(|a| !a.starts_with('-')).collect();
+    let f = fs();
+    let mut say = |s: &str| out!("{}\n", s);
+    match sub {
+        "list" => crate::snap::list_installed(f, &mut say),
+        "find" | "search" => {
+            crate::snap::find_cmd(f, &args.join(" "), &mut say);
+        }
+        "info" => match args.first() {
+            Some(n) => {
+                crate::snap::info(f, n, &mut say);
+            }
+            None => out!("usage: snap info <app>\n"),
+        },
+        "install" | "remove" if args.is_empty() => out!("usage: snap {} <app>...\n", sub),
+        "install" => {
+            for a in &args {
+                crate::snap::install(f, a, &mut say);
+            }
+        }
+        "remove" => {
+            for a in &args {
+                crate::snap::remove(f, a, &mut say);
+            }
+        }
+        "refresh" => out!("All snaps up to date.\n"),
+        "version" => out!("snap    1.0-bedrock\nsnapd   1.0-bedrock\nseries  16\nbedrockos {}\n", crate::VERSION),
+        "run" => {
+            let Some(name) = args.first() else {
+                out!("usage: snap run <app> [args]\n");
+                return;
+            };
+            let Some(s) = crate::snap::find(name) else {
+                out!("error: snap \"{}\" not found\n", name);
+                return;
+            };
+            if !crate::snap::is_installed(f, s) {
+                out!("error: snap \"{}\" is not installed (run: snap install {})\n", s.name, s.name);
+                return;
+            }
+            match s.desktop {
+                Some(app) => match crate::bootfx::open_named(app) {
+                    Ok(()) => out!("{} opened\n", app),
+                    Err(e) => out!("snap run: {}\n", e),
+                },
+                None => {
+                    let extra = rest.split_once(name).map_or("", |(_, r)| r);
+                    if let Some(t) = crate::snap::run_text(s.name, extra, crate::arch::ticks()) {
+                        out!("{}", t);
+                    }
+                }
+            }
+        }
+        _ => out!("{}", SNAP_HELP),
+    }
+}
+
+/// `apt` without a network repository: packages come from the built-in Snap Store.
+fn apt_offline(sub: &str, args: &[&str]) {
+    let f = fs();
+    let mut say = |s: &str| out!("{}\n", s);
+    let names: alloc::vec::Vec<&str> = args.iter().copied().filter(|a| !a.starts_with('-')).collect();
+    match sub {
+        "update" => {
+            crate::snap::seed(f);
+            let n = crate::snap::CATALOG.len();
+            let inst = crate::snap::CATALOG.iter().filter(|s| crate::snap::is_installed(f, s)).count();
+            out!("Hit:1 bedrock-store://offline stable InRelease\nReading package lists... Done\n{} packages available, {} installed. All packages are up to date.\n", n, inst);
+        }
+        "list" | "search" => {
+            crate::snap::seed(f);
+            let installed_only = args.iter().any(|a| *a == "--installed" || *a == "-i");
+            let q = names.first().map(|q| q.to_ascii_lowercase()).unwrap_or_default();
+            out!("Listing... Done\n");
+            for s in crate::snap::CATALOG {
+                let inst = crate::snap::is_installed(f, s);
+                if (installed_only && !inst) || !(q.is_empty() || s.name.contains(q.as_str()) || s.summary.to_ascii_lowercase().contains(q.as_str())) {
+                    continue;
+                }
+                out!("{}/stable {} amd64{}  - {}\n", s.name, s.version, if inst { " [installed]" } else { "" }, s.summary);
+            }
+        }
+        "show" | "info" => match names.first() {
+            Some(n) => {
+                crate::snap::info(f, n, &mut say);
+            }
+            None => out!("usage: apt show <package>\n"),
+        },
+        "install" | "add" | "reinstall" | "remove" | "purge" | "uninstall" if names.is_empty() => out!("usage: apt {} <package>...\n", sub),
+        "install" | "add" | "reinstall" => {
+            out!("Reading package lists... Done\nBuilding dependency tree... Done\n");
+            for n in &names {
+                if sub == "reinstall" {
+                    crate::snap::remove(f, n, &mut |_| {});
+                }
+                if crate::snap::install(f, n, &mut say) {
+                    if let Some(app) = crate::snap::find(n).and_then(|s| s.desktop) {
+                        out!("  start it with: open {}   (or snap run {})\n", app, n);
+                    }
+                }
+            }
+        }
+        "remove" | "purge" | "uninstall" => {
+            for n in &names {
+                crate::snap::remove(f, n, &mut say);
+            }
+        }
+        "upgrade" | "full-upgrade" | "dist-upgrade" | "autoremove" => {
+            out!("Reading package lists... Done\n0 upgraded, 0 newly installed, 0 to remove and 0 not upgraded.\n");
+        }
+        "files" => match names.first().and_then(|n| crate::snap::find(n)) {
+            Some(s) if crate::snap::is_installed(f, s) => out!("/snap/{}\n", s.name),
+            _ => out!("usage: apt files <installed package>\n"),
+        },
+        _ => {}
+    }
+}
+
 fn cmd_apt(rest: &str) {
     let mut parts = rest.split_whitespace();
     let sub = parts.next().unwrap_or("help");
     let args: alloc::vec::Vec<&str> = parts.collect();
+    let offline_sub = matches!(
+        sub,
+        "update" | "install" | "add" | "reinstall" | "upgrade" | "full-upgrade" | "dist-upgrade" | "remove" | "purge" | "uninstall" | "autoremove" | "list" | "search" | "show" | "info" | "files"
+    );
+    if offline_sub && crate::apt::get_source(fs()).is_none() {
+        apt_offline(sub, &args);
+        return;
+    }
     let keys = &crate::pkgkey::REPO_KEYS;
     let fs = fs();
     let mut say = |s: &str| out!("{}\n", s);
@@ -3856,6 +3987,14 @@ fn run_plain(line: &str, hist: &History) {
         "curl" | "http" => cmd_curl(rest),
         "netstat" => cmd_netstat(),
         "apt" => cmd_apt(rest),
+        "snap" => cmd_snap(rest),
+        "sudo" => match rest {
+            "" => out!("usage: sudo <command>\n"),
+            r => {
+                out!("[sudo] running as root (BedrockOS has one user, so no password)\n");
+                run_plain(r, hist);
+            }
+        },
         "block" => cmd_block(),
         "wake" => cmd_wake(),
         "counters" => out!("{} {}\n", COUNTERS[0].load(Ordering::Relaxed), COUNTERS[1].load(Ordering::Relaxed)),
@@ -3946,6 +4085,9 @@ fn run_plain(line: &str, hist: &History) {
             }
         }
         other if find_program(other).is_some() => run_job_line(line),
+        other if crate::snap::find(other).is_some_and(|s| s.desktop.is_none() && crate::snap::is_installed(fs(), s)) => {
+            cmd_snap(&alloc::format!("run {line}"));
+        }
         other => match cmdhelp::suggest(other) {
             Some(near) => out!("unknown command '{}'. Did you mean `{}`? (`help` lists everything)\n", other, near),
             None => out!("unknown command '{}', try `help`\n", other),
@@ -4023,6 +4165,7 @@ pub fn prepare_fs() {
         let rel = alloc::format!("NAME=BedrockOS\nVERSION={v}\nID=bedrockos\nPRETTY_NAME=\"BedrockOS {v}\"\n", v = crate::VERSION);
         let _ = f.write("/etc/os-release", rel.as_bytes());
     }
+    crate::snap::seed(f);
 }
 
 /// The prompt: `bedrock> ` at the top, `bedrock:/sd> ` inside a folder, so you can see where you are.

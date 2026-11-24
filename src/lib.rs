@@ -90,6 +90,7 @@ pub mod schedtrace;
 pub mod sha256;
 pub mod shparse;
 pub mod sha512;
+pub mod snap;
 pub mod splash;
 pub mod spin;
 pub mod syscall;

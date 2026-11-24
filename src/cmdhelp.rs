@@ -70,6 +70,8 @@ pub const COMMANDS: &[Cmd] = &[
     c("network", "http", "http <url>", "same as `curl`"),
     c("network", "netstat", "netstat", "interfaces, routes, ARP cache, sockets"),
     c("packaging", "apt", "apt <cmd> [pkg]", "signed package manager (apt help)"),
+    c("packaging", "snap", "snap <cmd> [app]", "Bedrock Snap Store: list, find, install, remove, run"),
+    c("packaging", "sudo", "sudo <command>", "run a command as root"),
     c("memory", "mem", "mem", "frames, heap and RAM totals"),
     c("memory", "free", "free", "same as `mem`"),
     c("memory", "alloc", "alloc <KiB>", "allocate and free memory; shows a refusal too"),
