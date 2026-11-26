@@ -1,0 +1,385 @@
+{
+ "params": {
+  "W": 1200,
+  "F": 700,
+  "ma_ns": 200.0,
+  "hdd_ns": 8000000.0,
+  "nvme_ns": 100000.0
+ },
+ "E1_textbook": {
+  "FIFO": {
+   "faults": 15,
+   "hit_ratio": 0.25
+  },
+  "LRU": {
+   "faults": 12,
+   "hit_ratio": 0.4
+  },
+  "OPT": {
+   "faults": 9,
+   "hit_ratio": 0.55
+  }
+ },
+ "E2_policies": {
+  "A epoch scan (same order)": {
+   "FIFO": 7200,
+   "LRU": 7200,
+   "MRU": 3700,
+   "OPT": 3700,
+   "refs": 7200,
+   "p_LRU": 1.0,
+   "distinct": 1200
+  },
+  "B shuffled epochs": {
+   "FIFO": 5463,
+   "LRU": 5908,
+   "MRU": 3701,
+   "OPT": 3700,
+   "refs": 7200,
+   "p_LRU": 0.8205555555555556,
+   "distinct": 1200
+  },
+  "C sharded (shard 500, 3 passes)": {
+   "FIFO": 1900,
+   "LRU": 1900,
+   "MRU": 3703,
+   "OPT": 1700,
+   "refs": 7200,
+   "p_LRU": 0.2638888888888889,
+   "distinct": 1200
+  },
+  "D hot weights + stream": {
+   "FIFO": 7555,
+   "LRU": 6715,
+   "MRU": 5848,
+   "OPT": 3700,
+   "refs": 13235,
+   "p_LRU": 0.5073668303740083,
+   "distinct": 1200
+  }
+ },
+ "E3_frames_sweep": {
+  "frames": [
+   100,
+   200,
+   300,
+   400,
+   500,
+   600,
+   700,
+   800,
+   900,
+   1000,
+   1100,
+   1200
+  ],
+  "A epoch scan (same order)": [
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   1.0,
+   0.1667
+  ],
+  "B shuffled epochs": [
+   0.9968,
+   0.9886,
+   0.9722,
+   0.9468,
+   0.9151,
+   0.8749,
+   0.8206,
+   0.754,
+   0.6647,
+   0.5474,
+   0.4,
+   0.1667
+  ],
+  "C sharded (shard 500, 3 passes)": [
+   0.9699,
+   0.831,
+   0.7453,
+   0.5883,
+   0.2639,
+   0.2639,
+   0.2639,
+   0.2624,
+   0.2575,
+   0.2501,
+   0.2257,
+   0.1667
+  ],
+  "D hot weights + stream": [
+   0.7867,
+   0.6441,
+   0.5611,
+   0.5259,
+   0.5142,
+   0.5094,
+   0.5074,
+   0.5067,
+   0.5066,
+   0.5063,
+   0.5062,
+   0.0907
+  ]
+ },
+ "E4_eat": {
+  "A epoch scan (same order)": {
+   "p": 1.0,
+   "EAT_hdd_us": 8000.0,
+   "slow_hdd": 40000,
+   "EAT_nvme_us": 100.0,
+   "slow_nvme": 500
+  },
+  "B shuffled epochs": {
+   "p": 0.8206,
+   "EAT_hdd_us": 6564.5,
+   "slow_hdd": 32822,
+   "EAT_nvme_us": 82.1,
+   "slow_nvme": 410
+  },
+  "C sharded (shard 500, 3 passes)": {
+   "p": 0.2639,
+   "EAT_hdd_us": 2111.3,
+   "slow_hdd": 10556,
+   "EAT_nvme_us": 26.5,
+   "slow_nvme": 133
+  },
+  "D hot weights + stream": {
+   "p": 0.5074,
+   "EAT_hdd_us": 4059.0,
+   "slow_hdd": 20295,
+   "EAT_nvme_us": 50.8,
+   "slow_nvme": 254
+  }
+ },
+ "E4_max_p_for_10pct_slowdown": {
+  "hdd": 2.500062501562539e-06,
+  "nvme": 0.0002004008016032064
+ },
+ "E5_wss": {
+  "A epoch scan (same order)": {
+   "mean": 1200,
+   "max": 1200,
+   "min": 1200,
+   "fit_fraction": 0.0
+  },
+  "B shuffled epochs": {
+   "mean": 1006,
+   "max": 1200,
+   "min": 897,
+   "fit_fraction": 0.0
+  },
+  "C sharded (shard 500, 3 passes)": {
+   "mean": 636,
+   "max": 1000,
+   "min": 500,
+   "fit_fraction": 0.8
+  },
+  "D hot weights + stream": {
+   "mean": 696,
+   "max": 736,
+   "min": 648,
+   "fit_fraction": 0.63
+  }
+ },
+ "E6_thrashing": [
+  {
+   "N": 1,
+   "frames_each": 1000,
+   "p": 0.0,
+   "util": 0.5
+  },
+  {
+   "N": 2,
+   "frames_each": 500,
+   "p": 0.0,
+   "util": 1.0
+  },
+  {
+   "N": 3,
+   "frames_each": 333,
+   "p": 0.0,
+   "util": 1.0
+  },
+  {
+   "N": 4,
+   "frames_each": 250,
+   "p": 0.0,
+   "util": 1.0
+  },
+  {
+   "N": 5,
+   "frames_each": 200,
+   "p": 0.0,
+   "util": 1.0
+  },
+  {
+   "N": 6,
+   "frames_each": 166,
+   "p": 0.0,
+   "util": 1.0
+  },
+  {
+   "N": 7,
+   "frames_each": 142,
+   "p": 0.0,
+   "util": 1.0
+  },
+  {
+   "N": 8,
+   "frames_each": 125,
+   "p": 0.0,
+   "util": 1.0
+  },
+  {
+   "N": 9,
+   "frames_each": 111,
+   "p": 0.0,
+   "util": 1.0
+  },
+  {
+   "N": 10,
+   "frames_each": 100,
+   "p": 0.0,
+   "util": 1.0
+  },
+  {
+   "N": 11,
+   "frames_each": 90,
+   "p": 0.101,
+   "util": 0.014
+  },
+  {
+   "N": 12,
+   "frames_each": 83,
+   "p": 0.1693,
+   "util": 0.009
+  },
+  {
+   "N": 13,
+   "frames_each": 76,
+   "p": 0.2367,
+   "util": 0.007
+  },
+  {
+   "N": 14,
+   "frames_each": 71,
+   "p": 0.2869,
+   "util": 0.006
+  },
+  {
+   "N": 15,
+   "frames_each": 66,
+   "p": 0.3386,
+   "util": 0.006
+  },
+  {
+   "N": 16,
+   "frames_each": 62,
+   "p": 0.3793,
+   "util": 0.005
+  },
+  {
+   "N": 17,
+   "frames_each": 58,
+   "p": 0.4178,
+   "util": 0.005
+  },
+  {
+   "N": 18,
+   "frames_each": 55,
+   "p": 0.4457,
+   "util": 0.005
+  },
+  {
+   "N": 19,
+   "frames_each": 52,
+   "p": 0.4763,
+   "util": 0.005
+  },
+  {
+   "N": 20,
+   "frames_each": 50,
+   "p": 0.4969,
+   "util": 0.005
+  },
+  {
+   "N": 25,
+   "frames_each": 40,
+   "p": 0.5965,
+   "util": 0.005
+  },
+  {
+   "N": 30,
+   "frames_each": 33,
+   "p": 0.6677,
+   "util": 0.006
+  }
+ ],
+ "E7_claims": {
+  "trials": 20000,
+  "lru_worse_than_fifo": 5655,
+  "fifo_more_frames_more_faults": 13,
+  "opt_worse_than_other": 0
+ },
+ "E7_example": {
+  "refs": [
+   5,
+   2,
+   8,
+   8,
+   2,
+   0,
+   0,
+   1,
+   8,
+   2,
+   6,
+   3,
+   3,
+   0,
+   4,
+   3,
+   4,
+   8,
+   3,
+   9,
+   5,
+   4,
+   8,
+   6,
+   2,
+   0,
+   5,
+   7,
+   9,
+   8,
+   6,
+   8,
+   2,
+   8,
+   2,
+   8,
+   8,
+   0,
+   7,
+   2,
+   9,
+   0,
+   2,
+   2,
+   2
+  ],
+  "frames": 5,
+  "fifo": 22,
+  "lru": 24
+ }
+}

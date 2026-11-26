@@ -1,0 +1,46 @@
+E1  Textbook reference string, 3 frames
+  FIFO faults=15  hit ratio=0.25
+  LRU  faults=12  hit ratio=0.40
+  OPT  faults= 9  hit ratio=0.55
+
+E2  Faults at F=700 of W=1200 pages (58% of dataset)
+  workload                             refs    FIFO     LRU     MRU     OPT   p(LRU)
+  A epoch scan (same order)            7200    7200    7200    3700    3700    1.000
+  B shuffled epochs                    7200    5463    5908    3701    3700    0.821
+  C sharded (shard 500, 3 passes)      7200    1900    1900    3703    1700    0.264
+  D hot weights + stream              13235    7555    6715    5848    3700    0.507
+
+E3  LRU fault rate vs frames
+  A epoch scan (same order)         1.000 1.000 1.000 1.000 1.000 1.000 1.000 1.000 1.000 1.000 1.000 0.167
+  B shuffled epochs                 0.997 0.989 0.972 0.947 0.915 0.875 0.821 0.754 0.665 0.547 0.400 0.167
+  C sharded (shard 500, 3 passes)   0.970 0.831 0.745 0.588 0.264 0.264 0.264 0.262 0.258 0.250 0.226 0.167
+  D hot weights + stream            0.787 0.644 0.561 0.526 0.514 0.509 0.507 0.507 0.507 0.506 0.506 0.091
+
+E4  Effective access time (ma=200 ns) and slowdown vs all-in-RAM
+  A epoch scan (same order)          p=1.000  HDD    8000.0 us (40000x)   NVMe    100.0 us (500x)
+  B shuffled epochs                  p=0.821  HDD    6564.5 us (32822x)   NVMe     82.1 us (410x)
+  C sharded (shard 500, 3 passes)    p=0.264  HDD    2111.3 us (10556x)   NVMe     26.5 us (133x)
+  D hot weights + stream             p=0.507  HDD    4059.0 us (20295x)   NVMe     50.8 us (254x)
+  max p for <=10% slowdown: HDD 2.50e-06   NVMe 2.00e-04
+
+E5  Working-set size WSS: distinct pages in a window of 1200 refs (one epoch = the reuse interval)
+  A epoch scan (same order)          mean=1200 max=1200   windows with WSS<=F=700: 0%
+  B shuffled epochs                  mean=1006 max=1200   windows with WSS<=F=700: 0%
+  C sharded (shard 500, 3 passes)    mean= 636 max=1000   windows with WSS<=F=700: 80%
+  D hot weights + stream             mean= 696 max= 736   windows with WSS<=F=700: 63%
+
+E6  Thrashing model: processes with w=100 pages each, M=1000 frames, LRU
+  N= 1 frames each=1000 p=0.000 CPU util=0.500
+  N= 2 frames each= 500 p=0.000 CPU util=1.000
+  N= 5 frames each= 200 p=0.000 CPU util=1.000
+  N=10 frames each= 100 p=0.000 CPU util=1.000
+  N=11 frames each=  90 p=0.101 CPU util=0.014
+  N=12 frames each=  83 p=0.169 CPU util=0.009
+  N=14 frames each=  71 p=0.287 CPU util=0.006
+  N=16 frames each=  62 p=0.379 CPU util=0.005
+  N=20 frames each=  50 p=0.497 CPU util=0.005
+  N=30 frames each=  33 p=0.668 CPU util=0.006
+
+E7  Checking common claims by random search (20,000 strings)
+  LRU worse than FIFO on 5655 strings; FIFO faulted MORE with one extra frame on 13; OPT beaten on 0
+  example where LRU loses: frames=5, FIFO=22, LRU=24

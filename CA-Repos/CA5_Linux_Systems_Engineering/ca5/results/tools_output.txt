@@ -1,0 +1,50 @@
+### lscpu (CPU topology)
+Architecture:                            x86_64
+CPU(s):                                  2
+Model name:                              Intel(R) Xeon(R) Processor @ 2.10GHz
+Thread(s) per core:                      1
+Core(s) per socket:                      2
+Socket(s):                               1
+L2 cache:                                4 MiB (2 instances)
+L3 cache:                                260 MiB (1 instance)
+
+### free -m (before)
+               total        used        free      shared  buff/cache   available
+Mem:            8024         383        7218          12         640        7640
+Swap:              0           0           0
+
+### page size / THP
+4096
+always [madvise] never
+
+### taskset: affinity of this shell
+pid 1448's current affinity mask: 3
+
+### vmstat 1 11 while ca5/hold_memory.py touches, holds and releases ~195 MiB
+procs -----------memory---------- ---swap-- -----io---- -system-- -------cpu-------
+ r  b   swpd   free   buff  cache   si   so    bi    bo   in   cs us sy id wa st gu
+ 2  0      0 7391848  17820 638208    0    0   719    46  380    2 10  2 88  0  0  0
+ 0  0      0 7390320  17820 638444    0    0     0     0  126  107  1  1 99  0  0  0
+ 0  0      0 7390320  17820 638644    0    0   200    20  191  306  1  0 99  0  0  0
+ 0  0      0 7188972  17820 638648    0    0     0     0   89   76  1  6 94  0  0  0
+ 0  0      0 7188972  17820 638648    0    0     0     0   54   75  0  0 100  0  0  0
+ 0  0      0 7188972  17820 638648    0    0     0     0   91  144  0  0 100  0  0  0
+ 0  0      0 7351392  17820 638648    0    0     0     0   86  100  0  1 99  0  0  0
+ 0  0      0 7355676  17820 638648    0    0     0     0   56   85  0  0 100  0  0  0
+ 0  0      0 7364536  17820 638648    0    0     0     0   46   71  0  0 100  0  0  0
+ 0  0      0 7373392  17820 638648    0    0     0     0  105  124  1  1 99  0  0  0
+ 0  0      0 7380432  17820 638648    0    0     0     0   88  121  0  0 100  0  0  0
+
+### ps -o for a controlled child (sleep 5) : state, PPID, faults, RSS
+  PID  PPID STAT  MINFL  MAJFL NLWP   RSS    VSZ COMMAND
+ 1460  1448 S       135      0    1  1764   2736 sleep
+
+### process explorer (ca5/procinfo.py): this shell and its ancestors
+   PID   PPID S   MINFLT  MAJFLT THR  RSS(KiB)  VSZ(KiB)  COMMAND
+  1448   1444 S      692       0   1      3996      5100  bash ca5/run_tools.sh
+  1444    119 S      424       0   1      3568      4632  /bin/bash -c source /root/.claude/shell-snapshot
+     1      0 S     2510       0  12      5568     32708  /process_api --firecracker-init --addr 0.0.0.0:2
+
+### /proc/vmstat pgfault / pgmajfault (system-wide counters)
+pgfault 10585221
+pgmajfault 6443

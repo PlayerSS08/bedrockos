@@ -1,0 +1,8 @@
+Part A  classic string [1, 2, 3, 4, 1, 2, 5, 1, 2, 3, 4, 5]
+  FIFO faults with 3 frames = 9, with 4 frames = 10  -> anomaly = True
+  LRU  3 frames = 10, 4 frames = 8
+  OPT  3 frames = 7, 4 frames = 6
+
+Part B  worst FIFO anomaly examples found (family, extra faults, string)
+  uniform: +2 faults  [7, 4, 3, 0, 5, 7, 4, 1, 6, 7, 3, 4, 2, 1, 5, 6, 4, 3, 2, 0, 4, 6, 4]
+  noisy_cycle: +7 faults  [0, 3, 2, 3, 4, 5, 6, 7, 0, 4, 2, 4, 6, 7, 0, 1, 2, 3, 4, 5, 6, 0, 1, 2, 3, 4, 5, 6, 7, 0, 2, 3, 4, 5, 6]

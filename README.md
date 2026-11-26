@@ -77,3 +77,8 @@ Details: [`docs/BUILD.md`](docs/BUILD.md) · USB stick: [`docs/USB.md`](docs/USB
 
 Kernel, drivers and shell are the author's own work. Fonts: Inter and JetBrains Mono,
 SIL Open Font License 1.1 (`docs/licenses/`).
+
+## OS CAs (CA-1 to CA-5)
+
+The earlier Operating Systems CAs are in [`CA-Repos/`](CA-Repos/). BedrockOS itself is CA-6.
+

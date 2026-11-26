@@ -1,0 +1,14 @@
+pattern,seed,footprint,frame_counts_checked,anomalies,worst_extra_faults
+sequential,0,512,511,0,0
+random,0,512,511,2,3
+random,1,512,511,9,12
+random,2,512,511,7,18
+shuffled,0,512,511,2,5
+shuffled,1,512,511,5,10
+shuffled,2,512,511,4,12
+bursty,0,560,559,1,1
+bursty,1,560,559,1,3
+bursty,2,560,559,2,1
+matmul_naive,0,768,30,0,0
+matmul_tiled,0,768,30,0,0
+fwd_bwd,0,256,255,0,0

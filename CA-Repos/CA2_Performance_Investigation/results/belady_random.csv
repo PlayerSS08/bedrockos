@@ -1,0 +1,7 @@
+family,policy,strings,with_anomaly,pct,worst_extra_faults
+uniform,FIFO,10000,20,0.2,2
+uniform,LRU,10000,0,0.0,0
+uniform,OPT,10000,0,0.0,0
+noisy_cycle,FIFO,10000,156,1.56,7
+noisy_cycle,LRU,10000,0,0.0,0
+noisy_cycle,OPT,10000,0,0.0,0
